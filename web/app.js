@@ -1,0 +1,824 @@
+/* Parts Tracker phone app. Talks to the Apps Script backend (see config.js). */
+(function () {
+  'use strict';
+  const CFG = window.PT_CONFIG || {};
+  const C = window.PTCodes;
+  const $ = id => document.getElementById(id);
+
+  const MODES = {
+    BOOK_IN: { title: 'Book in a delivery', hint: 'Scan each part that arrived.', engineer: false, done: 'Booked in' },
+    USED: { title: 'Parts used on a job', hint: 'Scan each part you fitted.', engineer: true, done: 'Recorded as used' },
+    CUSTOMER_FITTED: { title: 'Parts we fitted ourselves', hint: 'Scan each part you fitted.', engineer: false, done: 'Recorded as fitted' },
+    COUNT: { title: 'Stock count', hint: 'Scan every part here. Use + when there is more than one.', engineer: true, done: 'Count saved' }
+  };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count' };
+  // Each action has its own brand colour (see the tone-* classes in app.css)
+  const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue' };
+  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count' };
+  function setPill(id, mode) {
+    $(id).textContent = PILL[mode] || '';
+    $(id).className = 'mode-pill tone-' + (TONES[mode] || 'green');
+  }
+
+  // ---------- Storage (this phone only; the app still works if it is unavailable) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+    del(k) { try { localStorage.removeItem(k); } catch (e) {} }
+  };
+
+  const state = {
+    site: null,
+    session: store.get('pt_session', null),
+    user: store.get('pt_user', null),
+    data: null,
+    parts: new Map(),
+    partsVersion: '',
+    mode: null,
+    basket: [],
+    queue: store.get('pt_queue', []),
+    sending: false,
+    scanner: null,
+    view: null
+  };
+
+  // ---------- Small helpers ----------
+  function el(tag, attrs, ...children) {
+    const n = document.createElement(tag);
+    Object.entries(attrs || {}).forEach(([k, v]) => {
+      if (v == null || v === false) return;
+      if (k === 'class') n.className = v;
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? '' : v);
+    });
+    children.flat().forEach(c => { if (c != null && c !== false) n.append(c.nodeType ? c : String(c)); });
+    return n;
+  }
+  function uuid() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  }
+  function deviceLabel() {
+    const ua = navigator.userAgent;
+    const ios = ua.match(/(?:iPhone|CPU) OS ([\d_]+)/);
+    if (ios) return 'iOS ' + ios[1].replace(/_/g, '.');
+    const a = ua.match(/Android ([\d.]+)/);
+    return a ? 'Android ' + a[1] : (navigator.platform || 'browser');
+  }
+  function when(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    return sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  }
+  const isEngineer = () => !!state.user && /^(engineer|admin)$/i.test(state.user.role);
+  const partName = family => (state.parts.get(family) || {}).name || '';
+
+  let toastTimer = null;
+  function toast(msg, action) {
+    const t = $('toast');
+    t.textContent = '';
+    t.append(el('span', {}, msg));
+    if (action) t.append(el('button', { onclick: () => { hideToast(); action.fn(); } }, action.label));
+    t.classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, action ? 5000 : 3000);
+  }
+  function hideToast() { $('toast').classList.add('hidden'); }
+
+  // ---------- Scan feedback: beep and vibrate ----------
+  // Phones only allow sound after a tap, so the audio is unlocked on the first touch.
+  // iPhones do not vibrate from web pages, and the silent switch mutes the beep.
+  let audioCtx = null;
+  function unlockAudio() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!audioCtx && AC) audioCtx = new AC();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) {}
+  }
+  function tone(freq, start, length) {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    const t = audioCtx.currentTime + start;
+    o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + length);
+    o.start(t); o.stop(t + length + 0.02);
+  }
+  /** 'good' = part added (one high beep); 'attention' = needs a look (two low beeps). */
+  function feedback(kind) {
+    try { if (navigator.vibrate) navigator.vibrate(kind === 'good' ? 90 : [70, 60, 70]); } catch (e) {}
+    try {
+      if (!audioCtx) return;
+      if (kind === 'good') tone(1500, 0, 0.12);
+      else { tone(520, 0, 0.12); tone(520, 0.18, 0.12); }
+    } catch (e) {}
+  }
+
+  // ---------- Backend ----------
+  async function api(req) {
+    if (window.PT_MOCK_API) return window.PT_MOCK_API(JSON.parse(JSON.stringify(req)));
+    if (!CFG.apiUrl || /PASTE/.test(CFG.apiUrl)) {
+      const e = new Error('The app is not connected to its Google Sheet yet. Set apiUrl in config.js.');
+      e.code = 'config'; throw e;
+    }
+    let res;
+    try {
+      res = await fetch(CFG.apiUrl, { method: 'POST', body: JSON.stringify(req), redirect: 'follow' });
+    } catch (e) {
+      const err = new Error('No connection.'); err.code = 'offline'; throw err;
+    }
+    if (!res.ok) { const e = new Error('Server error ' + res.status); e.code = 'offline'; throw e; }
+    return res.json();
+  }
+
+  // ---------- Parts list (cached on the phone for offline lookups) ----------
+  function setParts(version, list) {
+    state.partsVersion = version || '';
+    state.parts = new Map();
+    (list || []).forEach(([family, name, codes]) => state.parts.set(family, { family, name, codes: String(codes || '') }));
+  }
+  function loadPartsCache() {
+    const c = store.get('pt_parts', null);
+    if (c) setParts(c.version, c.list);
+  }
+  function saveParts(version, list) {
+    setParts(version, list);
+    store.set('pt_parts', { version, list });
+  }
+
+  // ---------- Views ----------
+  function show(id) {
+    document.querySelectorAll('.view').forEach(v => { v.hidden = v.id !== id; });
+    if (state.view === 'view-scan' && id !== 'view-scan' && state.scanner) state.scanner.stop();
+    if (state.view !== id) hideToast();
+    state.view = id;
+    window.scrollTo(0, 0);
+  }
+
+  function renderBanner() {
+    const b = $('banner');
+    b.textContent = '';
+    const failed = state.queue.filter(q => q.error);
+    const waiting = state.queue.length;
+    if (!waiting && !state.offline) { b.classList.add('hidden'); return; }
+    let msg = state.offline ? 'Offline: showing saved data.' : '';
+    if (waiting) msg += (msg ? ' ' : '') + waiting + (waiting === 1 ? ' record is' : ' records are') + ' waiting to send.';
+    if (failed.length) msg += ' Problem: ' + failed[0].error;
+    b.append(el('span', {}, msg));
+    if (waiting) {
+      b.append(el('button', { class: 'small', onclick: () => syncQueue(true) }, 'Send now'));
+      if (failed.length) b.append(el('button', { class: 'small', onclick: discardFailed }, 'Discard'));
+    }
+    b.classList.remove('hidden');
+  }
+
+  function renderUserChip() {
+    const chip = $('userChip');
+    chip.hidden = false;
+    chip.textContent = state.user ? state.user.name.split(' ')[0] + ' · Sign out' : 'Engineer sign in';
+    chip.setAttribute('aria-label', state.user ? 'Signed in as ' + state.user.name + '. Sign out' : 'Engineer sign in');
+  }
+
+  function renderHome() {
+    const d = state.data;
+    if (!d) return;
+    $('siteName').textContent = d.site.name;
+    $('siteAddress').textContent = [d.site.address, d.site.postcode].filter(Boolean).join(', ');
+    const pl = $('printerList'); pl.textContent = '';
+    (d.printers || []).forEach(m => pl.append(el('span', {}, m)));
+    // Customers only see what they can do; engineers see everything once signed in
+    document.querySelectorAll('.action[data-engineer]').forEach(b => { b.hidden = !isEngineer(); });
+    const parts = (d.stock || []).filter(s => s.qty > 0);
+    const total = parts.reduce((n, s) => n + s.qty, 0);
+    $('stockSummary').textContent = parts.length ? total + ' items, ' + parts.length + ' different parts' : 'Nothing recorded yet';
+    const rl = $('recentList'); rl.textContent = '';
+    if (!(d.recent || []).length) rl.append(el('li', { class: 'muted' }, 'No activity yet.'));
+    (d.recent || []).forEach(r => rl.append(el('li', {},
+      activityIcon(r),
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, r.name || r.family),
+        el('div', { class: 'item-sub' }, [TYPE_LABEL[r.type] || r.type, r.by, r.jobNo ? 'job ' + r.jobNo : '', r.pending ? 'waiting to send' : when(r.at)].filter(Boolean).join(' · '))),
+      el('div', { class: 'qty' + (r.qty < 0 ? ' neg' : '') }, (r.qty > 0 ? '+' : '') + r.qty))));
+    renderBanner();
+  }
+
+  const ARROW_IN = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
+  const ARROW_OUT = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
+  const TICK = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  /** Round icon for a recent-activity row: in (green), out (grey) or count. */
+  function activityIcon(r) {
+    const kind = r.type === 'COUNT' ? 'count' : r.qty > 0 ? 'in' : 'out';
+    const span = el('span', { class: 'ricon ' + kind + ' tone-' + (TONES[r.type] || 'green'), 'aria-hidden': 'true' });
+    span.innerHTML = kind === 'count' ? TICK : kind === 'in' ? ARROW_IN : ARROW_OUT;
+    return span;
+  }
+
+  // ---------- Start-up ----------
+  async function init() {
+    const params = new URLSearchParams(location.search);
+    const fromQr = params.get('s');
+    if (fromQr) store.set('pt_site', fromQr);
+    loadPartsCache();
+    renderUserChip();
+    bindEvents();
+    registerServiceWorker();
+    window.addEventListener('online', () => { state.offline = false; syncQueue(); if (state.site) loadSite(); });
+    setInterval(() => syncQueue(), 60000);
+    if (params.has('admin')) return openAdmin();
+    state.site = fromQr || store.get('pt_site', null);
+    if (!state.site) { show('view-nosite'); return; }
+    await loadSite();
+    syncQueue();
+  }
+
+  async function loadSite() {
+    const cached = store.get('pt_boot_' + state.site, null);
+    if (cached && !state.data) {
+      state.data = cached;
+      renderHome();
+      if (!state.view || state.view === 'view-nosite') show('view-home');
+    }
+    try {
+      const r = await api({ action: 'bootstrap', site: state.site, partsVersion: state.partsVersion, session: state.session });
+      if (!r.ok) {
+        if (r.code === 'bad_site') {
+          store.del('pt_site');
+          show('view-nosite');
+          $('view-nosite').querySelector('p').textContent = r.error;
+          return;
+        }
+        throw Object.assign(new Error(r.error), { code: r.code });
+      }
+      if (r.parts) saveParts(r.partsVersion, r.parts);
+      delete r.parts;
+      if (state.session && !r.user) signOut(true);
+      if (r.user) { state.user = r.user; store.set('pt_user', r.user); }
+      state.data = r;
+      state.offline = false;
+      // Records still waiting to send are not on the server yet, so keep them in the picture
+      state.queue.filter(q => q.site === state.site).forEach(applyLocally);
+      store.set('pt_boot_' + state.site, state.data);
+      renderUserChip();
+      renderHome();
+      if (!state.view || state.view === 'view-nosite') show('view-home');
+    } catch (e) {
+      state.offline = e.code === 'offline';
+      if (!state.data) {
+        show('view-nosite');
+        $('view-nosite').querySelector('h1').textContent = state.offline ? 'No connection' : 'Could not load this site';
+        $('view-nosite').querySelector('p').textContent = state.offline ? 'Connect to the internet once to load this site. After that it works offline.' : e.message;
+      }
+      renderBanner();
+    }
+  }
+
+  // ---------- Sign in ----------
+  function signOut(quiet) {
+    state.session = null; state.user = null;
+    store.del('pt_session'); store.del('pt_user');
+    renderUserChip(); renderHome();
+    if (!quiet) toast('Signed out');
+  }
+
+  function askPin(then, title) {
+    let pin = '';
+    const display = el('div', { class: 'pin-display', 'aria-live': 'polite' }, '');
+    const err = el('div', { class: 'error', hidden: true });
+    const update = () => { display.textContent = '•'.repeat(pin.length); };
+    let checking = false;
+    const setChecking = on => {
+      checking = on;
+      display.textContent = on ? 'Checking…' : '•'.repeat(pin.length);
+      display.classList.toggle('checking', on);
+    };
+    const submit = async () => {
+      if (pin.length < 4 || checking) return;
+      err.hidden = true;
+      setChecking(true);
+      try {
+        const r = await api({ action: 'login', pin, site: state.site || 'admin' });
+        setChecking(false);
+        if (!r.ok) { err.textContent = r.error; err.hidden = false; pin = ''; update(); return; }
+        state.session = r.session; state.user = r.user;
+        store.set('pt_session', r.session); store.set('pt_user', r.user);
+        closeSheet(); renderUserChip(); renderHome();
+        toast('Signed in as ' + r.user.name);
+        state.queue.forEach(q => { if (q.error && /sign in/i.test(q.error)) q.error = ''; });
+        saveQueue(); syncQueue();
+        if (then) then();
+      } catch (e) {
+        setChecking(false);
+        err.textContent = e.code === 'offline' ? 'No connection. Signing in needs signal.' : e.message; err.hidden = false;
+      }
+    };
+    const key = k => el('button', { onclick: () => {
+      if (checking) return;
+      if (k === 'del') pin = pin.slice(0, -1);
+      else if (k === 'ok') return submit();
+      else if (pin.length < 8) pin += k;
+      update();
+    } }, k === 'del' ? '⌫' : k === 'ok' ? 'OK' : k);
+    openSheet(title || 'Engineer sign in', [
+      el('p', { class: 'muted' }, 'Enter your PIN.'),
+      display, err,
+      el('div', { class: 'keypad' }, ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'].map(key)),
+      el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))
+    ]);
+    warmUp();
+  }
+
+  /** Wakes the server while the PIN is typed, so the sign-in itself is quicker. */
+  function warmUp() {
+    if (window.PT_MOCK_API || !CFG.apiUrl || /PASTE/.test(CFG.apiUrl)) return;
+    fetch(CFG.apiUrl, { mode: 'no-cors' }).catch(() => {});
+  }
+
+  // ---------- Bottom sheet ----------
+  let sheetOnClose = null;
+  function openSheet(title, content, onClose) {
+    $('sheetTitle').textContent = title;
+    const body = $('sheetBody'); body.textContent = '';
+    [].concat(content).flat().forEach(c => { if (c != null && c !== '') body.append(c); });
+    hideToast();
+    $('sheet').classList.remove('hidden');
+    $('sheetBackdrop').classList.remove('hidden');
+    sheetOnClose = onClose || null;
+    if (state.scanner) state.scanner.pause();
+  }
+  function closeSheet() {
+    $('sheet').classList.add('hidden');
+    $('sheetBackdrop').classList.add('hidden');
+    const fn = sheetOnClose; sheetOnClose = null;
+    if (fn) fn();
+    resumeScan();
+  }
+  function resumeScan() {
+    if (state.view === 'view-scan' && state.scanner && $('sheet').classList.contains('hidden')) state.scanner.resume();
+  }
+
+  // ---------- Scanning ----------
+  function startMode(mode) {
+    if (MODES[mode].engineer && !isEngineer()) {
+      askPin(() => startMode(mode), 'Engineers only: sign in');
+      return;
+    }
+    state.mode = mode;
+    state.basket = [];
+    $('scanTitle').textContent = MODES[mode].title;
+    setPill('scanPill', mode);
+    $('view-scan').className = 'view tone-' + TONES[mode];
+    $('scanHint').textContent = MODES[mode].hint;
+    $('basketTitle').textContent = mode === 'COUNT' ? 'Counted' : 'Scanned';
+    renderBasket();
+    show('view-scan');
+    startCamera();
+  }
+
+  async function startCamera(deviceId) {
+    if (!state.scanner) {
+      state.scanner = PTScanner.startLive({
+        video: $('video'), guide: $('guide'), viewport: $('viewport'),
+        onRead: r => handleCode(r.text, 'barcode'),
+        onStatus: t => { $('vpStatus').textContent = t; }
+      });
+    }
+    $('vpStatus').textContent = 'Starting camera…';
+    const info = await state.scanner.start(deviceId);
+    if (!info) return;
+    const z = $('zoom');
+    z.min = info.zoom.min; z.max = info.zoom.max; z.step = info.zoom.step; z.value = info.zoom.value;
+    $('torchBtn').classList.toggle('hidden', !info.torch);
+    const sel = $('cameraSelect'); sel.textContent = '';
+    info.cameras.forEach(c => sel.append(el('option', { value: c.id, selected: c.id === info.deviceId }, c.label)));
+    sel.classList.toggle('hidden', info.cameras.length < 2);
+    $('vpStatus').textContent = 'Point at a barcode';
+  }
+
+  /** A code from a barcode, photo, text reading or search. Known parts are added; unknown ones need a name. */
+  function handleCode(raw, source) {
+    const n = C.normalise(raw);
+    if (!n.family) { resumeScan(); return; }
+    const part = state.parts.get(n.family);
+    if (part) {
+      feedback('good');
+      addToBasket(n, part.name, false);
+      toast('Added: ' + part.name, { label: 'Undo', fn: () => changeQty(n.family, -1) });
+      setTimeout(resumeScan, 600);
+    } else {
+      feedback('attention');
+      confirmNewPart(n, source);
+    }
+  }
+
+  function confirmNewPart(n, source) {
+    const name = el('input', { class: 'input', placeholder: 'Part name from the box', maxlength: '120', autocomplete: 'off' });
+    const err = el('div', { class: 'error', hidden: true }, 'Enter the part name from the box.');
+    openSheet('Not in the parts list', [
+      el('p', { class: 'muted' }, source === 'text' ? 'Read from the label text. Check every character against the box:' : 'Check every character against the box:'),
+      el('div', { class: 'big-code' }, n.exact),
+      n.warning ? el('div', { class: 'warn' }, 'This does not look like a normal part code. Only add it if it matches the box exactly.') : null,
+      el('label', { class: 'muted' }, 'Part name', name),
+      err,
+      el('div', { class: 'buttons' },
+        el('button', { class: 'primary', onclick: () => {
+          if (!name.value.trim()) { err.hidden = false; return; }
+          addToBasket(n, name.value.trim(), true);
+          closeSheet();
+          toast('Added new part: ' + name.value.trim());
+        } }, 'Add new part'),
+        el('button', { onclick: closeSheet }, 'Cancel'))
+    ]);
+    setTimeout(() => name.focus(), 50);
+  }
+
+  function addToBasket(n, name, isNew) {
+    const existing = state.basket.find(b => b.family === n.family);
+    if (existing) existing.qty++;
+    else state.basket.push({ family: n.family, exact: n.exact, name, qty: 1, isNew, odd: !!n.warning });
+    renderBasket();
+  }
+  function changeQty(family, delta) {
+    const b = state.basket.find(x => x.family === family);
+    if (!b) return;
+    b.qty += delta;
+    if (b.qty <= 0) state.basket = state.basket.filter(x => x !== b);
+    renderBasket();
+  }
+  function renderBasket() {
+    const list = $('basketList'); list.textContent = '';
+    state.basket.forEach(b => list.append(el('li', {},
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
+        el('div', { class: 'item-sub mono' }, b.family)),
+      el('div', { class: 'stepper' },
+        el('button', { 'aria-label': 'One less', onclick: () => changeQty(b.family, -1) }, '−'),
+        el('span', { class: 'qty' }, b.qty),
+        el('button', { 'aria-label': 'One more', onclick: () => changeQty(b.family, 1) }, '+')))));
+    $('basketEmpty').hidden = state.basket.length > 0;
+    const n = state.basket.reduce((s, b) => s + b.qty, 0);
+    $('scanNext').disabled = !state.basket.length && state.mode !== 'COUNT';
+    $('scanNext').textContent = n ? 'Review (' + n + ')' : 'Review';
+  }
+
+  async function onPhoto(file) {
+    state.scanner && state.scanner.pause();
+    toast('Reading photo…');
+    try {
+      const r = await PTScanner.decodePhoto(file);
+      if (r && r.text) return handleCode(r.text, 'photo');
+      feedback('attention');
+      toast(r && r.suspect ? 'Barcode looks damaged (read as ' + r.suspect + '). Try Read text or Search.' : 'No barcode found. Try again closer, or use Search.');
+    } catch (e) { toast(e.message); }
+    resumeScan();
+  }
+
+  async function onTextPhoto(file) {
+    const status = el('p', { class: 'muted' }, 'Reading text…');
+    openSheet('Reading the label', [status, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    try {
+      const res = await PTScanner.readText(file, t => { status.textContent = t; });
+      if ($('sheet').classList.contains('hidden')) return;
+      showTextResults(res);
+    } catch (e) { status.textContent = e.message; }
+  }
+
+  function showTextResults(res) {
+    const items = res.candidates.map(fam => {
+      const part = state.parts.get(fam);
+      return el('button', { class: 'pick', onclick: () => {
+        closeSheet();
+        if (part) handleCode(fam, 'text'); else confirmNewPart(C.normalise(fam), 'text');
+      } },
+        el('span', {}, el('span', { class: 'item-name' }, part ? part.name : 'Not in parts list'), el('span', { class: 'item-sub mono' }, fam)),
+        part ? '' : el('span', { class: 'tag' }, 'check'));
+    });
+    const frags = (res.fragments || []).slice(0, 3).map(f => el('button', { class: 'pick', onclick: () => { closeSheet(); openSearch(f); } },
+      el('span', {}, el('span', { class: 'item-name' }, 'Search for ' + f), el('span', { class: 'item-sub' }, 'Part of a code was readable'))));
+    openSheet(items.length ? 'Which part is it?' : 'No part code found', [
+      el('p', { class: 'muted' }, items.length ? 'Pick the one that matches the box. Check the name.' : 'The text could not be read clearly.'),
+      items, frags,
+      el('div', { class: 'buttons' },
+        el('button', { onclick: () => { closeSheet(); openSearch(''); } }, 'Search instead'),
+        el('button', { onclick: closeSheet }, 'Cancel'))
+    ]);
+  }
+
+  // ---------- Search ----------
+  function searchParts(q) {
+    const raw = String(q || '').toUpperCase().replace(/\s+/g, '');
+    const core = raw.replace(/^(PFFB|PFB|FFB|FB|P)(?=\d)/, '');
+    const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!raw) return [];
+    const out = [];
+    for (const p of state.parts.values()) {
+      const codeHit = core && (p.family.slice(1).startsWith(core.slice(0, 9)) || p.codes.toUpperCase().replace(/[\s,]/g, ' ').includes(core));
+      const nameHit = words.length && words.every(w => p.name.toLowerCase().includes(w));
+      if (codeHit || nameHit) out.push(p);
+      if (out.length >= 30) break;
+    }
+    return out;
+  }
+  function openSearch(initial) {
+    const input = el('input', { class: 'input', placeholder: 'Part code or name', autocomplete: 'off', value: initial || '' });
+    const results = el('div', {});
+    const render = () => {
+      results.textContent = '';
+      const q = input.value.trim();
+      const hits = searchParts(q);
+      hits.forEach(p => results.append(el('button', { class: 'pick', onclick: () => { closeSheet(); handleCode(p.family, 'search'); } },
+        el('span', {}, el('span', { class: 'item-name' }, p.name), el('span', { class: 'item-sub mono' }, p.family)))));
+      const n = C.normalise(q);
+      if (q && !n.warning && !state.parts.get(n.family)) {
+        results.append(el('button', { class: 'pick', onclick: () => { closeSheet(); confirmNewPart(n, 'search'); } },
+          el('span', {}, el('span', { class: 'item-name' }, 'Add ' + n.family + ' as a new part'), el('span', { class: 'item-sub' }, 'Not in the parts list'))));
+      }
+      if (q && !results.children.length) results.append(el('p', { class: 'muted' }, 'No matching parts.'));
+    };
+    input.addEventListener('input', render);
+    openSheet('Search parts', [input, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]);
+    render();
+    setTimeout(() => input.focus(), 50);
+  }
+
+  // ---------- Review and send ----------
+  function openReview() {
+    const mode = state.mode;
+    $('reviewTitle').textContent = MODES[mode].title;
+    setPill('reviewPill', mode);
+    const stock = {};
+    (state.data && state.data.stock || []).forEach(s => { stock[s.family] = s.qty; });
+    const list = $('reviewList'); list.textContent = '';
+    if (!state.basket.length) list.append(el('li', { class: 'muted' }, 'Nothing scanned.'));
+    state.basket.forEach(b => list.append(el('li', {},
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
+        el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : ''))),
+      el('div', { class: 'qty' }, b.qty))));
+    const zl = $('zeroList'); zl.textContent = '';
+    const missing = mode === 'COUNT' ? Object.keys(stock).filter(f => stock[f] > 0 && !state.basket.some(b => b.family === f)) : [];
+    missing.forEach(f => zl.append(el('li', {},
+      el('input', { type: 'checkbox', checked: true, value: f, id: 'z-' + f, 'aria-label': 'Set ' + f + ' to 0' }),
+      el('label', { class: 'item-main', for: 'z-' + f },
+        el('div', { class: 'item-name' }, partName(f) || 'Unknown part'),
+        el('div', { class: 'item-sub mono' }, f + ' · on record: ' + stock[f])))));
+    $('zeroCard').hidden = !missing.length;
+    $('jobCard').hidden = mode !== 'USED';
+    $('reviewError').hidden = true;
+    $('reviewSend').disabled = false;
+    show('view-review');
+  }
+
+  async function sendReview() {
+    const mode = state.mode;
+    const jobNo = $('jobNo').value.trim();
+    const err = $('reviewError');
+    if (mode === 'USED' && !jobNo) { err.textContent = 'Enter the job or ticket number.'; err.hidden = false; return; }
+    const zero = Array.from($('zeroList').querySelectorAll('input:checked')).map(i => i.value);
+    if (!state.basket.length && !zero.length) { err.textContent = 'Nothing to send.'; err.hidden = false; return; }
+    $('reviewSend').disabled = true;
+    const batch = {
+      batchId: uuid(), site: state.site, siteName: state.data ? state.data.site.name : '', type: mode, jobNo,
+      note: $('note').value.trim(), device: deviceLabel(), createdAt: new Date().toISOString(),
+      by: state.user ? state.user.name : 'Customer',
+      items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined })),
+      zero, count: state.basket.reduce((s, b) => s + b.qty, 0)
+    };
+    // Saved on the phone first, shown as done straight away, then sent in the background
+    // (the server takes a few seconds, and the phone may have no signal)
+    state.queue.push(batch);
+    saveQueue();
+    applyLocally(batch);
+    $('jobNo').value = ''; $('note').value = '';
+    state.basket = [];
+    showDone(batch);
+    sendBatch(batch).then(result => showSendResult(batch, result));
+  }
+
+  /** Updates the site's stock and recent activity on the phone before the server confirms. */
+  function applyLocally(batch) {
+    if (!state.data || batch.site !== state.site) return;
+    const stock = {};
+    (state.data.stock || []).forEach(s => { stock[s.family] = Object.assign({}, s); });
+    const sign = { BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1 }[batch.type];
+    const recent = [];
+    const add = (family, name, qty) => {
+      if (!stock[family]) stock[family] = { family, name: name || partName(family), qty: 0 };
+      const was = stock[family].qty;
+      stock[family].qty = sign ? was + sign * qty : qty;
+      const delta = stock[family].qty - was;
+      if (delta) recent.push({ at: batch.createdAt, family, name: stock[family].name, qty: delta, type: batch.type, by: batch.by, jobNo: batch.jobNo, pending: true });
+    };
+    batch.items.forEach(it => add(C.normalise(it.code).family, it.name, it.qty));
+    if (batch.type === 'COUNT') (batch.zero || []).forEach(f => { if (!batch.items.some(it => C.normalise(it.code).family === f)) add(f, '', 0); });
+    state.data.stock = Object.values(stock).filter(s => s.qty !== 0).sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
+    state.data.recent = recent.concat(state.data.recent || []).slice(0, 10);
+    store.set('pt_boot_' + state.site, state.data);
+    renderHome();
+  }
+
+  function showDone(batch) {
+    state.doneBatch = batch.batchId;
+    $('doneTitle').textContent = MODES[batch.type].done;
+    $('doneText').textContent = batch.type === 'COUNT'
+      ? 'Stock updated for ' + batch.siteName + '.'
+      : batch.count + (batch.count === 1 ? ' part' : ' parts') + ' recorded at ' + batch.siteName + '.';
+    $('doneStatus').textContent = 'Sending…';
+    $('doneStatus').className = 'send-status';
+    $('doneWarn').hidden = true;
+    show('view-done');
+  }
+
+  function belowZeroText(families) {
+    return 'Stock went below zero for: ' + families.map(f => partName(f) || f).join(', ') + '. This site probably needs a stock count.';
+  }
+
+  /** Shows how the background send went: on the done screen if it is still open, otherwise as a message. */
+  function showSendResult(batch, result) {
+    const onScreen = state.view === 'view-done' && state.doneBatch === batch.batchId;
+    if (result.busy) return;
+    if (!onScreen) {
+      if (result.ok && result.belowZero.length) toast(belowZeroText(result.belowZero));
+      return;
+    }
+    const status = $('doneStatus');
+    if (result.ok) {
+      status.textContent = 'Saved';
+      status.className = 'send-status ok';
+      if (result.belowZero.length) { $('doneWarn').textContent = belowZeroText(result.belowZero); $('doneWarn').hidden = false; }
+    } else if (result.queued) {
+      status.textContent = 'No signal. Saved on this phone; it will send automatically.';
+      status.className = 'send-status wait';
+    } else {
+      status.textContent = 'Not sent: ' + result.error;
+      status.className = 'send-status bad';
+    }
+  }
+
+  function saveQueue() { store.set('pt_queue', state.queue); renderBanner(); }
+
+  /** Sends one queued batch. Keeps it queued if offline or if sign-in is needed. */
+  const inFlight = new Set();
+  async function sendBatch(batch) {
+    if (inFlight.has(batch.batchId)) return { ok: false, busy: true };
+    inFlight.add(batch.batchId);
+    try {
+      return await sendBatchNow(batch);
+    } finally {
+      inFlight.delete(batch.batchId);
+    }
+  }
+  async function sendBatchNow(batch) {
+    try {
+      const r = await api(Object.assign({ action: 'submit', session: state.session }, batch));
+      if (r.ok) {
+        state.queue = state.queue.filter(q => q.batchId !== batch.batchId);
+        if (state.data && batch.site === state.site) {
+          state.data.stock = r.stock;
+          store.set('pt_boot_' + state.site, state.data);
+          loadSite();
+        }
+        saveQueue();
+        return { ok: true, belowZero: r.belowZero || [] };
+      }
+      batch.error = (r.code === 'session' || r.code === 'forbidden') ? r.error + ' Sign in to send it.' : r.error;
+      saveQueue();
+      return { ok: false, error: batch.error };
+    } catch (e) {
+      if (e.code === 'offline') { state.offline = true; renderBanner(); return { ok: false, queued: true }; }
+      batch.error = e.message; saveQueue();
+      return { ok: false, error: e.message };
+    }
+  }
+
+  async function syncQueue(manual) {
+    if (state.sending || !state.queue.length) return;
+    state.sending = true;
+    try {
+      for (const batch of state.queue.slice()) {
+        if (batch.error && !manual) continue;
+        batch.error = '';
+        const r = await sendBatch(batch);
+        if (r.queued) break;
+      }
+      if (manual && !state.queue.length) toast('All records sent');
+    } finally { state.sending = false; renderBanner(); }
+  }
+
+  function discardFailed() {
+    if (!confirm('Discard the records that could not be sent? They will not be recorded.')) return;
+    state.queue = state.queue.filter(q => !q.error);
+    saveQueue();
+  }
+
+  // ---------- Stock view ----------
+  function renderStock() {
+    const q = $('stockFilter').value.trim().toLowerCase();
+    const list = $('stockList'); list.textContent = '';
+    const rows = (state.data && state.data.stock || []).filter(s => !q || (s.name || '').toLowerCase().includes(q) || s.family.toLowerCase().includes(q.replace(/\s/g, '')));
+    rows.forEach(s => list.append(el('li', {},
+      el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'), el('div', { class: 'item-sub mono' }, s.family)),
+      el('div', { class: 'qty' + (s.qty < 0 ? ' neg' : '') }, s.qty))));
+    $('stockEmpty').hidden = rows.length > 0;
+  }
+
+  // ---------- Admin: site QR codes ----------
+  async function openAdmin() {
+    $('siteName').textContent = 'Admin';
+    show('view-admin');
+    if (!state.user || !/admin/i.test(state.user.role)) { askPin(loadAdmin, 'Admin sign in'); return; }
+    loadAdmin();
+  }
+  async function loadAdmin() {
+    $('adminSummary').textContent = 'Loading…';
+    try {
+      const r = await api({ action: 'admin', session: state.session });
+      if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session') askPin(loadAdmin, 'Admin sign in'); return; }
+      $('adminSummary').textContent = r.sites.length + ' sites. ' + (r.unreviewedParts ? r.unreviewedParts + ' new parts need checking in the Parts tab.' : '');
+      const grid = $('qrGrid'); grid.textContent = '';
+      const base = location.origin + location.pathname.replace(/index\.html$/, '');
+      r.sites.forEach(s => {
+        const url = base + '?s=' + encodeURIComponent(s.token);
+        const card = el('div', { class: 'qr-card' });
+        if (window.qrcode) {
+          const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+          const holder = el('div', {}); holder.innerHTML = qr.createSvgTag(4, 2);
+          card.append(holder);
+        }
+        card.append(
+          el('div', { class: 'qr-site' }, s.name),
+          el('div', { class: 'qr-hint' }, 'Scan to book parts in and out'),
+          el('div', { class: 'qr-meta' }, s.items + ' items · ' + (s.lastCount ? 'counted ' + when(s.lastCount) : 'never counted')),
+          el('a', { href: url }, 'Open site'));
+        grid.append(card);
+      });
+    } catch (e) { $('adminSummary').textContent = e.message; }
+  }
+
+  // ---------- Events ----------
+  function bindEvents() {
+    document.addEventListener('pointerdown', unlockAudio, true);
+    $('themeBtn').addEventListener('click', toggleTheme);
+    if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', renderThemeButton);
+    renderThemeButton();
+    $('userChip').addEventListener('click', () => state.user ? signOut() : askPin(null));
+    document.querySelectorAll('.action[data-mode]').forEach(b => b.addEventListener('click', () => startMode(b.dataset.mode)));
+    $('viewStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
+    $('stockFilter').addEventListener('input', renderStock);
+    $('stockBack').addEventListener('click', () => show('view-home'));
+    $('zoom').addEventListener('input', e => state.scanner && state.scanner.applyZoom(Number(e.target.value)));
+    $('torchBtn').addEventListener('click', () => state.scanner && state.scanner.torch());
+    $('cameraSelect').addEventListener('change', e => startCamera(e.target.value));
+    $('photoInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) onPhoto(f); });
+    $('textInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) onTextPhoto(f); });
+    $('searchBtn').addEventListener('click', () => openSearch(''));
+    $('scanCancel').addEventListener('click', () => {
+      if (state.basket.length && !confirm('Discard the parts scanned so far?')) return;
+      state.basket = []; show('view-home');
+    });
+    $('scanNext').addEventListener('click', openReview);
+    $('reviewBack').addEventListener('click', () => { show('view-scan'); startCamera(); });
+    $('reviewSend').addEventListener('click', sendReview);
+    $('doneHome').addEventListener('click', () => { renderHome(); show('view-home'); });
+    $('sheetBackdrop').addEventListener('click', closeSheet);
+    $('printQr').addEventListener('click', () => window.print());
+    $('adminRefresh').addEventListener('click', loadAdmin);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && state.scanner) state.scanner.stop();
+      else if (!document.hidden && state.view === 'view-scan') startCamera();
+    });
+  }
+
+  // ---------- Light / dark mode ----------
+  // Follows the phone's setting until the button is used; the choice is then remembered on this phone.
+  const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function currentTheme() {
+    const t = document.documentElement.dataset.theme;
+    return t === 'light' || t === 'dark' ? t : (darkQuery && darkQuery.matches ? 'dark' : 'light');
+  }
+  function renderThemeButton() {
+    const dark = currentTheme() === 'dark';
+    const btn = $('themeBtn');
+    btn.classList.toggle('is-dark', dark);
+    btn.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+    const meta = document.querySelector('meta[name=theme-color]');
+    if (meta) meta.setAttribute('content', dark ? '#1F1F1F' : '#FFFFFF');
+  }
+  function toggleTheme() {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    store.set('pt_theme', next);
+    renderThemeButton();
+  }
+
+  function registerServiceWorker() {
+    if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
+  // Exposed for automated tests
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin };
+
+  init();
+})();

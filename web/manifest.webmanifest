@@ -1,0 +1,9 @@
+{
+  "name": "Parts Tracker",
+  "short_name": "Parts",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#EBEBEB",
+  "theme_color": "#FFFFFF",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

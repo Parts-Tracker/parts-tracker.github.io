@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Parts Tracker E2E</title></head>
+<body>
+<script src="gas-stubs.js"></script>
+<script>
+/* End-to-end test: the real backend (Code.gs, Setup.gs) on in-memory sheets, driven through the real phone app.
+   Serve the app folder over http and open test/e2e.html; results land in window.__result. */
+(async () => {
+  const log = [];
+  let failed = 0;
+  const check = (name, cond, detail) => { log.push((cond ? 'PASS ' : 'FAIL ') + name + (cond || detail === undefined ? '' : ' -> ' + JSON.stringify(detail))); if (!cond) failed++; };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const waitFor = async (fn, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { try { const v = fn(); if (v) return v; } catch (e) {} await sleep(30); } return null; };
+  const runScript = async path => { const s = document.createElement('script'); s.textContent = await (await fetch(path)).text(); document.head.appendChild(s); };
+  const loadScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.body.appendChild(s); });
+  const finish = () => { window.__result = 'DONE ' + (failed ? failed + ' FAILED' : 'ALL PASSED') + '\n' + log.join('\n'); };
+  try {
+    try { localStorage.clear(); } catch (e) {}
+
+    // ---- Backend on in-memory sheets ----
+    await runScript('../backend/Code.gs');
+    await runScript('../backend/Setup.gs');
+    runSetup();
+    check('editor setup (separate project) creates all tabs', Object.keys(SHEETS).every(n => SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n)));
+    loadSampleData_();
+    const call = req => JSON.parse(doPost({ postData: { contents: JSON.stringify(req) } }).getContent());
+    let apiDown = false, slowMs = 0;
+    window.PT_MOCK_API = async req => {
+      if (apiDown) { const e = new Error('No connection.'); e.code = 'offline'; throw e; }
+      if (slowMs && req.action === 'submit') await sleep(slowMs);
+      return call(req);
+    };
+    const saved = () => waitFor(() => $('doneStatus').textContent === 'Saved');
+    const rows = name => readTable_(name);
+    const stockOf = (siteId, fam) => stockBySite_(siteId)[fam] || 0;
+    const site = rows('Sites')[0];
+    check('sample data has 2 sites with tokens', rows('Sites').length === 2 && rows('Sites').every(s => String(s.Token).length === 32));
+    check('PINs stored hashed, plain PIN cleared', rows('Users').every(u => u.PinHash && !u.PIN));
+
+    // ---- Code rule parity between backend and app ----
+    await loadScript('../web/codes.js');
+    const codes = ['FFB053K9189X', '059K58130', '676K 3364', 'P676K 3364X', 'PFB607K4403X', '338807E5651X', 'Roller', '127K 58960'];
+    check('backend and app part code rules match', codes.every(c => JSON.stringify(normaliseCode(c)) === JSON.stringify(PTCodes.normalise(c))));
+
+    // ---- Load the real app page for the sample site ----
+    history.replaceState(null, '', location.pathname + '?s=' + site.Token);
+    const html = await (await fetch('../web/index.html')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '../web/app.css'; document.head.appendChild(css);
+    Array.from(doc.body.children).filter(n => n.tagName !== 'SCRIPT').forEach(n => document.body.appendChild(document.importNode(n, true)));
+    window.PT_CONFIG = { apiUrl: 'mock' };
+    await loadScript('https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js');
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js');
+    await loadScript('../web/scanner.js');
+    await loadScript('../web/app.js');
+    const $ = id => document.getElementById(id);
+    const visible = id => !$(id).hidden;
+    const A = window.PTApp;
+
+    check('home shows the site', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co'), $('siteName').textContent);
+    check('parts list downloaded to the phone', A.state.parts.size === 9, A.state.parts.size);
+
+    // ---- Customer books in a delivery, including a new part ----
+    document.querySelector('[data-mode=BOOK_IN]').click();
+    check('book in opens the scanner', await waitFor(() => visible('view-scan')));
+    const buzz = [];
+    navigator.vibrate = p => { buzz.push(JSON.stringify(p)); return true; };
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    A.handleCode('FFB059K6158X', 'barcode');
+    check('known part scan buzzes once', buzz[0] === '90', buzz);
+    A.handleCode('P059K6158X', 'barcode');
+    A.handleCode('053K 91890', 'barcode');
+    check('known parts added by name, repeats counted', A.state.basket.length === 2 && A.state.basket[0].qty === 2 && A.state.basket[0].name === 'Tray 1/2 Feed Roll', A.state.basket);
+    A.handleCode('FFB999K12345', 'barcode');
+    check('unknown part asks for a name', await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list'));
+    check('unknown part buzzes twice', buzz[buzz.length - 1] === '[70,60,70]', buzz);
+    $('sheetBody').querySelector('input').value = 'Test Widget';
+    Array.from($('sheetBody').querySelectorAll('button')).find(b => b.textContent === 'Add new part').click();
+    check('new part added to basket', A.state.basket.some(b => b.family === 'P999K1234X' && b.isNew));
+    $('scanNext').click();
+    check('review shows 3 lines', await waitFor(() => visible('view-review') && $('reviewList').children.length === 3));
+    check('no job number asked when booking in', $('jobCard').hidden);
+    slowMs = 1500;
+    const sentAt = Date.now();
+    $('reviewSend').click();
+    check('done screen shows at once while the server is slow', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Booked in', 300) && Date.now() - sentAt < 500, Date.now() - sentAt);
+    check('done screen says it is sending', $('doneStatus').textContent === 'Sending…', $('doneStatus').textContent);
+    check('site stock updated on the phone before the server replies', (A.state.data.stock.find(s => s.family === 'P059K6158X') || {}).qty === 2, A.state.data.stock);
+    check('recent activity marks it waiting to send', /waiting to send/.test($('recentList').textContent));
+    check('booking in confirmed as saved', await saved(), $('doneStatus').textContent);
+    slowMs = 0;
+    check('stock recorded: feed roll 2, filter 1, new part 1',
+      stockOf(site.SiteID, 'P059K6158X') === 2 && stockOf(site.SiteID, 'P053K9189X') === 1 && stockOf(site.SiteID, 'P999K1234X') === 1);
+    const newPart = rows('Parts').find(p => p.Family === 'P999K1234X');
+    check('new part saved unreviewed with its name', newPart && newPart.Name === 'Test Widget' && newPart.Reviewed === false, newPart);
+    check('movement rows say who and how', rows('Movements').every(m => m.By === 'Customer' && m.Role === 'customer' && m.Type === 'BOOK_IN'));
+    check('exact code kept on the movement', rows('Movements').some(m => m.ExactCode === 'P053K91890' && m.Family === 'P053K9189X'));
+    $('doneHome').click();
+    check('home shows recent activity', await waitFor(() => $('recentList').children.length === 3), $('recentList').children.length);
+
+    // ---- Engineer: used on a job needs sign-in and a job number ----
+    const tile = m => document.querySelector('[data-mode=' + m + ']');
+    check('customers see only their tiles', tile('USED').hidden && tile('COUNT').hidden && !tile('CUSTOMER_FITTED').hidden && !tile('BOOK_IN').hidden);
+    $('userChip').click();
+    check('engineer sign in asks for a PIN', await waitFor(() => $('sheetTitle').textContent.includes('sign in')));
+    const key = k => Array.from($('sheetBody').querySelectorAll('.keypad button')).find(b => b.textContent === k).click();
+    ['1', '1', '1', '1', 'OK'].forEach(key);
+    check('engineer tiles appear after sign in', await waitFor(() => !tile('USED').hidden && !tile('COUNT').hidden));
+    check('recent activity has in/out icons', $('recentList').querySelectorAll('.ricon.in').length > 0);
+    tile('USED').click();
+    check('engineer signed in and scanner opened', await waitFor(() => visible('view-scan') && A.state.user && A.state.user.name === 'Test Engineer'));
+    check('used-on-a-job screen is pink', $('view-scan').classList.contains('tone-pink') && $('scanPill').textContent === 'Used on a job');
+    A.handleCode('P059K6158X', 'barcode');
+    $('scanNext').click();
+    await waitFor(() => visible('view-review'));
+    check('job number box shown', !$('jobCard').hidden);
+    $('reviewSend').click();
+    check('send blocked without a job number', await waitFor(() => !$('reviewError').hidden));
+    $('jobNo').value = 'J1001';
+    $('reviewSend').click();
+    check('used on a job recorded', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Recorded as used') && await saved());
+    const used = rows('Movements').find(m => m.Type === 'USED');
+    check('used row has job, engineer and -1', used && used.JobNo === 'J1001' && used.By === 'Test Engineer' && used.Qty === -1, used);
+
+    // ---- Using more than is on record is recorded and flagged ----
+    $('doneHome').click();
+    document.querySelector('[data-mode=USED]').click();
+    await waitFor(() => visible('view-scan'));
+    A.handleCode('P053K9189X', 'barcode'); A.handleCode('P053K9189X', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    $('jobNo').value = 'J1002'; $('reviewSend').click();
+    check('below-zero use is recorded and warned', await waitFor(() => visible('view-done') && !$('doneWarn').hidden), $('doneWarn').textContent);
+    check('below-zero row has a note', rows('Movements').some(m => /below zero/.test(m.Note)));
+
+    // ---- Stock count sets quantities and zeroes what was not found ----
+    $('doneHome').click();
+    document.querySelector('[data-mode=COUNT]').click();
+    await waitFor(() => visible('view-scan'));
+    ['P059K6158X', 'P059K6158X', 'P059K6158X'].forEach(c => A.handleCode(c, 'barcode'));
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    const zeroFams = Array.from($('zeroList').querySelectorAll('input')).map(i => i.value);
+    check('count lists parts on record but not scanned', zeroFams.includes('P999K1234X') && !zeroFams.includes('P053K9189X'), zeroFams);
+    $('reviewSend').click();
+    check('count saved', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Count saved') && await saved());
+    check('count result: feed roll 3, new part 0', stockOf(site.SiteID, 'P059K6158X') === 3 && stockOf(site.SiteID, 'P999K1234X') === 0);
+    check('site last-count date set', !!rows('Sites')[0].LastCount);
+
+    // ---- Offline: saved on the phone, sent later, never twice ----
+    $('doneHome').click();
+    apiDown = true;
+    document.querySelector('[data-mode=BOOK_IN]').click();
+    await waitFor(() => visible('view-scan'));
+    A.handleCode('P004E1900X', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    $('reviewSend').click();
+    check('offline send is kept on the phone', await waitFor(() => visible('view-done') && /saved on this phone/i.test($('doneStatus').textContent)), $('doneStatus').textContent);
+    check('offline record shown in site stock straight away', (A.state.data.stock.find(s => s.family === 'P004E1900X') || {}).qty === 1);
+    check('queue holds one record', A.state.queue.length === 1);
+    const queued = JSON.parse(JSON.stringify(A.state.queue[0]));
+    apiDown = false;
+    await A.syncQueue(true);
+    check('queued record sent when back online', A.state.queue.length === 0 && stockOf(site.SiteID, 'P004E1900X') === 1);
+    const before = rows('Movements').length;
+    const dup = call(Object.assign({ action: 'submit' }, queued));
+    check('a resent record is ignored', dup.ok && dup.duplicate && rows('Movements').length === before, dup);
+
+    // ---- Light / dark switch ----
+    const themeBefore = document.documentElement.dataset.theme;
+    $('themeBtn').click();
+    const first = document.documentElement.dataset.theme;
+    $('themeBtn').click();
+    const second = document.documentElement.dataset.theme;
+    check('theme button switches between light and dark', ['light', 'dark'].includes(first) && second !== first, [themeBefore, first, second]);
+    check('theme choice remembered', JSON.parse(localStorage.getItem('pt_theme')) === second);
+    check('theme button label says what it will do', $('themeBtn').getAttribute('aria-label') === (second === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'));
+
+    // ---- Search ----
+    check('search by partial code', A.searchParts('059K6').some(p => p.family === 'P059K6158X'));
+    check('search by FFB code', A.searchParts('FFB059K61').some(p => p.family === 'P059K6158X'));
+    check('search by name words', A.searchParts('feed roll').length === 2, A.searchParts('feed roll').map(p => p.name));
+
+    // ---- Server-side protection ----
+    const noSession = call({ action: 'submit', site: site.Token, batchId: 'x1', type: 'USED', jobNo: '1', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('customer cannot record used parts', !noSession.ok && noSession.code === 'forbidden', noSession);
+    const countAsCustomer = call({ action: 'submit', site: site.Token, batchId: 'x2', type: 'COUNT', items: [{ code: 'P059K6158X', qty: 9 }] });
+    check('customer cannot do a stock count', !countAsCustomer.ok && countAsCustomer.code === 'forbidden');
+    const badSite = call({ action: 'bootstrap', site: 'not-a-real-token-123456' });
+    check('unknown QR token rejected', !badSite.ok && badSite.code === 'bad_site');
+    const forged = call({ action: 'submit', site: site.Token, session: 'RTAxfDk5OTk5OTk5OTk5OTk5.forged', batchId: 'x3', type: 'USED', jobNo: '1', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('forged session rejected', !forged.ok && forged.code === 'session', forged);
+    const engSession = A.state.session;
+    const adminAsEng = call({ action: 'admin', session: engSession });
+    check('engineer cannot open admin', !adminAsEng.ok && adminAsEng.code === 'forbidden');
+    let lockedOut = null;
+    for (let i = 0; i < 6; i++) lockedOut = call({ action: 'login', site: 'lock-test', pin: '0000' });
+    check('repeated wrong PINs lock sign-in', !lockedOut.ok && lockedOut.code === 'locked', lockedOut);
+    for (let i = 0; i < 40; i++) lockedOut = call({ action: 'login', site: 'vary-' + i, pin: '0000' });
+    check('varying the site cannot get round the PIN lock', !lockedOut.ok && lockedOut.code === 'locked', lockedOut);
+    CacheService.getScriptCache().remove('pinfail:all');  // let the rest of the test sign in
+
+    // ---- Sign-in uses a cached user list but still sees changes made in the Sheet ----
+    check('sessions last 30 days', SESSION_HOURS === 720);
+    appendObjects_('Users', [{ UserID: 'E02', Name: 'New Engineer', Role: 'engineer', PIN: '2222', Active: true }]);
+    const newUser = call({ action: 'login', site: site.Token, pin: '2222' });
+    check('user added to the Sheet can sign in straight away', newUser.ok && newUser.user.name === 'New Engineer', newUser);
+    const e02 = rows('Users').find(u => u.UserID === 'E02');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(e02._row, SHEETS.Users.indexOf('Active') + 1).setValue(false);
+    CacheService.getScriptCache().remove('users:v1');  // the cache would expire on its own within 5 minutes
+    const blocked = call({ action: 'submit', site: site.Token, session: newUser.session, batchId: 'x9', type: 'USED', jobNo: '1', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('deactivated user is blocked once the cache refreshes', !blocked.ok && blocked.code === 'session', blocked);
+
+    // ---- Each action keeps its own colour ----
+    const tone = sel => (document.querySelector(sel).className.match(/tone-\w+/) || [''])[0];
+    check('action tiles use the secondary colours', tone('[data-mode=USED]') === 'tone-pink' && tone('[data-mode=COUNT]') === 'tone-blue' && tone('[data-mode=CUSTOMER_FITTED]') === 'tone-purple' && tone('#viewStockBtn') === 'tone-lime');
+    check('recent activity coloured by type', $('recentList').querySelector('.ricon.tone-green') !== null);
+
+    // ---- Admin: QR codes for every site ----
+    const adminLogin = call({ action: 'login', site: 'admin', pin: '9999' });
+    const admin = call({ action: 'admin', session: adminLogin.session });
+    check('admin sees both sites with tokens', admin.ok && admin.sites.length === 2 && admin.sites[0].token === site.Token, admin);
+    check('admin told about new parts to check', admin.unreviewedParts === 1, admin.unreviewedParts);
+
+    // ---- Admin page in the app: one printable QR card per site ----
+    $('userChip').click();
+    check('engineer signs out', !A.state.user && $('userChip').textContent === 'Engineer sign in');
+    A.openAdmin();
+    check('admin page asks for a PIN', await waitFor(() => $('sheetTitle').textContent === 'Admin sign in' && !$('sheet').classList.contains('hidden')));
+    ['9', '9', '9', '9', 'OK'].forEach(key);
+    check('admin page shows a QR card per site', await waitFor(() => $('qrGrid').querySelectorAll('.qr-card svg').length === 2), $('adminSummary').textContent);
+    check('admin PIN sheet closed after sign in', $('sheet').classList.contains('hidden'));
+    const link = $('qrGrid').querySelector('a').getAttribute('href');
+    check('QR link opens the site', link.endsWith('?s=' + site.Token), link);
+
+    // ---- New-part sheet has no stray text ----
+    $('doneHome').click();
+    A.handleCode('FFB888K77770', 'photo');
+    check('new-part sheet has no stray text', await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list') && !/null|undefined/.test($('sheetBody').textContent), $('sheetBody').textContent);
+  } catch (e) {
+    check('test run crashed', false, String(e && e.stack || e));
+  }
+  finish();
+})();
+</script>
+</body>
+</html>
