@@ -1273,7 +1273,18 @@
   }
 
   function registerServiceWorker() {
-    if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+    if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+    // When a new version takes over, reload once so the open screen runs it (not on the very first install)
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      // Never interrupt a scan in progress; it picks up the update next time the app opens
+      if (state.view === 'view-scan' || state.view === 'view-review' || state.basket.length) return;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => reg.update()).catch(() => {});
   }
 
   // Exposed for automated tests
