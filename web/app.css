@@ -265,4 +265,8 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .kit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .order-text { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.85rem; background: var(--bg); padding: 10px; border-radius: 8px; }
 #nositeVan { margin-top: 10px; }
-.order-qty.done { color: var(--text-muted); font-weight: 600; }
+/* "Ordered" badge on van kit lines: brand blue, tappable to undo */
+.ordered-badge { flex: none; min-height: 34px; padding: 4px 12px; border-radius: 999px; font-size: 0.9rem; font-weight: 700; white-space: nowrap;
+  background: #E8F3F8; color: #0F425F; border: 2px solid #1E83BE; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ordered-badge { background: #0F425F; color: #D2E6F2; border-color: #78B5D8; } }
+:root[data-theme="dark"] .ordered-badge { background: #0F425F; color: #D2E6F2; border-color: #78B5D8; }

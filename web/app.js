@@ -817,7 +817,12 @@
         el('div', { class: 'item-main' },
           el('div', { class: 'item-name' }, partName(k.family) || 'Unknown part'),
           el('div', { class: 'item-sub' }, k.family + ' · have ' + k.have + ' · min ' + k.min + ' · max ' + k.max)),
-        el('div', { class: 'order-qty' + (k.ordered ? ' done' : '') }, k.ordered ? 'Ordered' : 'Order ' + k.order))));
+        k.ordered
+          // Tapping the badge undoes it, for when the form was opened but the order was not submitted
+          ? el('button', { class: 'ordered-badge', 'aria-label': 'Ordered. Tap to mark as not ordered', onclick: () => {
+              if (confirm('Mark ' + (partName(k.family) || k.family) + ' as not ordered?')) { clearOrdered([k.family]); renderVan(); }
+            } }, '✓ Ordered')
+          : el('div', { class: 'order-qty' }, 'Order ' + k.order))));
     }
     $('vanKitActions').hidden = !short.length;
     renderRecent($('vanRecentList'), v.recent);

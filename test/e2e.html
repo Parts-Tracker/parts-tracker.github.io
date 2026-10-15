@@ -209,6 +209,13 @@
     check('order form fixed fields filled in', f('Parts Reason') === 'CAR STOCK' && f('SD CALL No.') === 'Van Kit' && f('ByBox/Collection') === 'Yes' && f('Customer Name') === 'Test Engineer');
     check('order form part line filled in', f('1 Part No.') === 'P059K5813X' && f('1 Qty') === '2' && f('1 Description') === 'Tray 1/2 Feed Roll - Nudger', [f('1 Part No.'), f('1 Qty'), f('1 Description')]);
     check('ordered part is flagged and not ordered again', await waitFor(() => /Ordered/.test($('vanKitList').textContent)) && A.orderLines().length === 0);
+    window.confirm = () => true;
+    $('vanKitList').querySelector('.ordered-badge').click();
+    check('tapping Ordered marks it as not ordered', A.orderLines().length === 1 && !$('vanKitList').querySelector('.ordered-badge'));
+    $('orderParts').click();
+    await waitFor(() => $('sheetTitle').textContent === 'Order van stock');
+    [...$('sheetBody').querySelectorAll('button')].find(b => b.textContent === 'Open order form').click();
+    check('re-ordered part shows the Ordered badge again', await waitFor(() => !!$('vanKitList').querySelector('.ordered-badge')));
     const sixParts = ['5 Part code', '5 qty', '5 Part Description '].every(k => new URL(A.smartsheetUrl([1, 2, 3, 4, 5].map(i => ({ family: 'P059K6158X', qty: i })))).searchParams.has(k));
     check('form row 5 uses its own field names (incl. trailing space)', sixParts);
     document.querySelector('[data-van-mode=BOOK_IN]').click();
