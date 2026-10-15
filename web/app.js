@@ -724,37 +724,196 @@
     $('stockEmpty').hidden = rows.length > 0;
   }
 
-  // ---------- Admin: site QR codes ----------
+  // ---------- Admin dashboard ----------
+  // One request loads every site, all stock lines and the parts list; everything else is worked out on the phone.
+  const admin = { data: null, parts: new Map(), byFamily: new Map(), bySite: [], qrBuilt: false, tab: 'find' };
+
   async function openAdmin() {
     $('siteName').textContent = 'Admin';
     show('view-admin');
     if (!state.user || !/admin/i.test(state.user.role)) { askPin(loadAdmin, 'Admin sign in'); return; }
     loadAdmin();
   }
+
   async function loadAdmin() {
     $('adminSummary').textContent = 'Loading…';
     try {
       const r = await api({ action: 'admin', session: state.session });
-      if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session') askPin(loadAdmin, 'Admin sign in'); return; }
-      $('adminSummary').textContent = r.sites.length + ' sites. ' + (r.unreviewedParts ? r.unreviewedParts + ' new parts need checking in the Parts tab.' : '');
-      const grid = $('qrGrid'); grid.textContent = '';
-      const base = location.origin + location.pathname.replace(/index\.html$/, '');
-      r.sites.forEach(s => {
-        const url = base + '?s=' + encodeURIComponent(s.token);
-        const card = el('div', { class: 'qr-card' });
-        if (window.qrcode) {
-          const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
-          const holder = el('div', {}); holder.innerHTML = qr.createSvgTag(4, 2);
-          card.append(holder);
-        }
-        card.append(
-          el('div', { class: 'qr-site' }, s.name),
-          el('div', { class: 'qr-hint' }, 'Scan to book parts in and out'),
-          el('div', { class: 'qr-meta' }, s.items + ' items · ' + (s.lastCount ? 'counted ' + when(s.lastCount) : 'never counted')),
-          el('a', { href: url }, 'Open site'));
-        grid.append(card);
+      if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session' || r.code === 'forbidden') askPin(loadAdmin, 'Admin sign in'); return; }
+      admin.data = r;
+      admin.parts = new Map((r.parts || []).map(([family, name, codes]) => [family, { family, name, codes: String(codes || '') }]));
+      admin.byFamily = new Map();
+      admin.bySite = r.sites.map(() => []);
+      (r.stock || []).forEach(([si, family, qty]) => {
+        if (!admin.byFamily.has(family)) admin.byFamily.set(family, []);
+        admin.byFamily.get(family).push({ site: si, qty });
+        admin.bySite[si].push({ family, qty });
       });
-    } catch (e) { $('adminSummary').textContent = e.message; }
+      admin.qrBuilt = false;
+      $('adminSummary').textContent = '';
+      renderAdminStats();
+      renderPartResults();
+      renderSites();
+      if (admin.tab === 'qr') renderQr();
+    } catch (e) { $('adminSummary').textContent = e.code === 'offline' ? 'No connection. The dashboard needs signal.' : e.message; }
+  }
+
+  const adminPartName = f => (admin.parts.get(f) || {}).name || 'Unknown part';
+  const siteLine = s => [s.town, s.postcode].filter(Boolean).join(' · ');
+
+  function renderAdminStats() {
+    const d = admin.data;
+    const items = d.sites.reduce((n, s) => n + s.items, 0);
+    const holding = d.sites.filter(s => s.items > 0).length;
+    const never = d.sites.filter(s => !s.lastCount).length;
+    const stat = (value, label, tone) => el('div', { class: 'stat' + (tone ? ' tone-' + tone : '') }, el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label));
+    const box = $('adminStats'); box.textContent = '';
+    box.append(
+      stat(d.sites.length, 'sites', 'green'),
+      stat(items, 'items at ' + holding + (holding === 1 ? ' site' : ' sites'), 'lime'),
+      stat(never, 'never counted', never ? 'pink' : 'blue'),
+      stat(d.unreviewedParts, 'new parts to check', d.unreviewedParts ? 'purple' : 'blue'));
+  }
+
+  function showAdminTab(tab) {
+    admin.tab = tab;
+    document.querySelectorAll('[data-admin-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.adminTab === tab)));
+    ['find', 'sites', 'site', 'qr'].forEach(t => { $('admin-' + t).hidden = t !== tab; });
+    if (tab === 'qr') renderQr();
+  }
+
+  // --- Find a part: which sites hold it ---
+  function matchAdminParts(q) {
+    const raw = q.toUpperCase().replace(/\s+/g, '');
+    const core = raw.replace(/^(PFFB|PFB|FFB|FB|P)(?=\d)/, '');
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const out = [];
+    for (const p of admin.parts.values()) {
+      const codeHit = core.length >= 3 && /\d/.test(core) && (p.family.slice(1).startsWith(core.slice(0, 9)) || p.codes.toUpperCase().replace(/[\s,]+/g, ' ').includes(core));
+      const nameHit = words.length && words.every(w => p.name.toLowerCase().includes(w));
+      if (codeHit || nameHit) out.push(p);
+    }
+    return out;
+  }
+  function holdersOf(family) {
+    return (admin.byFamily.get(family) || []).filter(h => h.qty !== 0).sort((a, b) => b.qty - a.qty);
+  }
+  function renderPartResults() {
+    const out = $('partResults'); out.textContent = '';
+    if (!admin.data) return;
+    const q = $('partQuery').value.trim();
+    let parts, heading;
+    if (q) {
+      parts = matchAdminParts(q);
+      heading = parts.length ? parts.length + (parts.length === 1 ? ' matching part' : ' matching parts') : 'No matching parts';
+    } else {
+      // Nothing typed: show the parts held at the most sites
+      parts = [...admin.byFamily.keys()].map(f => admin.parts.get(f) || { family: f, name: 'Unknown part', codes: '' })
+        .sort((a, b) => holdersOf(b.family).length - holdersOf(a.family).length).slice(0, 10);
+      heading = parts.length ? 'Most widely held parts' : 'No stock recorded at any site yet';
+    }
+    const total = f => holdersOf(f).reduce((n, h) => n + Math.max(0, h.qty), 0);
+    parts.sort((a, b) => total(b.family) - total(a.family));
+    out.append(el('p', { class: 'muted' }, heading));
+    parts.slice(0, 25).forEach(p => {
+      const holders = holdersOf(p.family);
+      const held = holders.filter(h => h.qty > 0).length, below = holders.filter(h => h.qty < 0).length;
+      // Below-zero records mean more were used than booked in: the site needs a count, not a "0 held"
+      const summary = held ? total(p.family) + ' at ' + held + (held === 1 ? ' site' : ' sites')
+        : below ? 'Below zero at ' + below + (below === 1 ? ' site' : ' sites') + ': needs a count' : 'Not at any site';
+      const card = el('div', { class: 'card part-card' },
+        el('div', { class: 'part-head' },
+          el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, p.name), el('div', { class: 'item-sub mono' }, p.family)),
+          el('div', { class: 'part-total' + (held ? '' : below ? ' below' : ' none') }, summary)));
+      if (holders.length) {
+        const ul = el('ul', { class: 'list' });
+        holders.forEach(h => {
+          const s = admin.data.sites[h.site];
+          ul.append(el('li', { class: 'clickable', onclick: () => showSiteDetail(h.site) },
+            el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name), el('div', { class: 'item-sub' }, siteLine(s))),
+            el('div', { class: 'qty' + (h.qty < 0 ? ' neg' : '') }, h.qty)));
+        });
+        card.append(ul);
+      }
+      out.append(card);
+    });
+  }
+
+  // --- Sites list ---
+  function filteredSites() {
+    const q = $('siteQuery').value.trim().toLowerCase();
+    return admin.data.sites.map((s, i) => Object.assign({ i }, s)).filter(s => !q ||
+      [s.name, s.town, s.postcode, s.postcode.replace(/\s/g, ''), s.printers.join(' ')].join(' ').toLowerCase().includes(q));
+  }
+  function renderSites() {
+    if (!admin.data) return;
+    const sort = $('siteSort').value;
+    const rows = filteredSites().sort((a, b) =>
+      sort === 'items' ? b.items - a.items || a.name.localeCompare(b.name)
+        : sort === 'count' ? (a.lastCount || '').localeCompare(b.lastCount || '') || a.name.localeCompare(b.name)
+          : a.name.localeCompare(b.name));
+    $('siteCount').textContent = rows.length + ' of ' + admin.data.sites.length + ' sites';
+    const ul = $('siteList'); ul.textContent = '';
+    rows.forEach(s => ul.append(el('li', { class: 'clickable', onclick: () => showSiteDetail(s.i) },
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, s.name),
+        el('div', { class: 'item-sub' }, [siteLine(s), s.printers.join(', ')].filter(Boolean).join(' · ')),
+        el('div', { class: 'item-sub' + (s.lastCount ? '' : ' warn-text') }, s.lastCount ? 'Counted ' + when(s.lastCount) : 'Never counted')),
+      el('div', { class: 'qty' }, s.items))));
+    if (!rows.length) ul.append(el('li', { class: 'muted' }, 'No sites match.'));
+  }
+
+  // --- One site ---
+  function showSiteDetail(i) {
+    const s = admin.data.sites[i];
+    const head = $('siteDetailHead'); head.textContent = '';
+    head.append(
+      el('div', { class: 'hero-label' }, 'Site ' + s.id),
+      el('h1', { class: 'site-name' }, s.name),
+      el('div', { class: 'hero-address' }, siteLine(s)),
+      el('div', { class: 'chips' }, s.printers.map(m => el('span', {}, m))),
+      el('div', { class: 'hero-address hero-meta' }, [s.lastCount ? 'Counted ' + when(s.lastCount) : 'Never counted', s.lastActivity ? 'last activity ' + when(s.lastActivity) : 'no activity yet'].join(' · ')));
+    const ul = $('siteDetailStock'); ul.textContent = '';
+    const lines = admin.bySite[i].filter(l => l.qty !== 0).sort((a, b) => adminPartName(a.family).localeCompare(adminPartName(b.family)));
+    lines.forEach(l => ul.append(el('li', {},
+      el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, adminPartName(l.family)), el('div', { class: 'item-sub mono' }, l.family)),
+      el('div', { class: 'qty' + (l.qty < 0 ? ' neg' : '') }, l.qty))));
+    if (!lines.length) ul.append(el('li', { class: 'muted' }, 'No stock recorded.'));
+    $('siteDetailOpen').href = siteUrl(s.token);
+    ['find', 'sites', 'qr'].forEach(t => { $('admin-' + t).hidden = true; });
+    $('admin-site').hidden = false;
+    window.scrollTo(0, 0);
+  }
+
+  // --- QR codes: built when the tab is opened; untick a card to leave it out of the print ---
+  function siteUrl(token) {
+    return location.origin + location.pathname.replace(/index\.html$/, '') + '?s=' + encodeURIComponent(token);
+  }
+  function renderQr() {
+    if (admin.qrBuilt || !admin.data) return;
+    const grid = $('qrGrid'); grid.textContent = '';
+    grid.append(el('div', { class: 'row3 no-print qr-select' },
+      el('button', { class: 'small', onclick: () => grid.querySelectorAll('.qr-card input').forEach(c => { c.checked = true; c.dispatchEvent(new Event('change')); }) }, 'Select all'),
+      el('button', { class: 'small', onclick: () => grid.querySelectorAll('.qr-card input').forEach(c => { c.checked = false; c.dispatchEvent(new Event('change')); }) }, 'Select none')));
+    admin.data.sites.map((s, i) => Object.assign({ i }, s)).sort((a, b) => a.name.localeCompare(b.name)).forEach(s => {
+      const url = siteUrl(s.token);
+      const card = el('div', { class: 'qr-card' });
+      const tick = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Print ' + s.name });
+      tick.addEventListener('change', () => card.classList.toggle('skip', !tick.checked));
+      card.append(el('label', { class: 'qr-tick no-print' }, tick, 'Print'));
+      if (window.qrcode) {
+        const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+        const holder = el('div', {}); holder.innerHTML = qr.createSvgTag(4, 2);
+        card.append(holder);
+      }
+      card.append(
+        el('div', { class: 'qr-site' }, s.name),
+        el('div', { class: 'qr-hint' }, 'Scan to book parts in and out'),
+        el('div', { class: 'qr-meta' }, siteLine(s)),
+        el('a', { href: url }, 'Open site'));
+      grid.append(card);
+    });
+    admin.qrBuilt = true;
   }
 
   // ---------- Events ----------
@@ -785,6 +944,11 @@
     $('sheetBackdrop').addEventListener('click', closeSheet);
     $('printQr').addEventListener('click', () => window.print());
     $('adminRefresh').addEventListener('click', loadAdmin);
+    document.querySelectorAll('[data-admin-tab]').forEach(b => b.addEventListener('click', () => showAdminTab(b.dataset.adminTab)));
+    $('partQuery').addEventListener('input', renderPartResults);
+    $('siteQuery').addEventListener('input', renderSites);
+    $('siteSort').addEventListener('change', renderSites);
+    $('siteBack').addEventListener('click', () => showAdminTab('sites'));
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && state.scanner) state.scanner.stop();
       else if (!document.hidden && state.view === 'view-scan') startCamera();
@@ -818,7 +982,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin };
 
   init();
 })();

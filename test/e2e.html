@@ -227,10 +227,39 @@
     A.openAdmin();
     check('admin page asks for a PIN', await waitFor(() => $('sheetTitle').textContent === 'Admin sign in' && !$('sheet').classList.contains('hidden')));
     ['9', '9', '9', '9', 'OK'].forEach(key);
-    check('admin page shows a QR card per site', await waitFor(() => $('qrGrid').querySelectorAll('.qr-card svg').length === 2), $('adminSummary').textContent);
+    check('dashboard loads with summary figures', await waitFor(() => $('adminStats').children.length === 4 && $('adminStats').textContent.includes('sites')), $('adminSummary').textContent);
     check('admin PIN sheet closed after sign in', $('sheet').classList.contains('hidden'));
-    const link = $('qrGrid').querySelector('a').getAttribute('href');
+    check('summary counts both sites', $('adminStats').querySelector('.stat-value').textContent === '2');
+
+    // Find a part: by code and by name
+    $('partQuery').value = '059K6158'; $('partQuery').dispatchEvent(new Event('input'));
+    const found = $('partResults').textContent;
+    check('part search by code shows the site holding it', /Tray 1\/2 Feed Roll/.test(found) && /Sample Print Co/.test(found) && /3 at 1 site/.test(found), found.slice(0, 200));
+    $('partQuery').value = 'FFB059K61'; $('partQuery').dispatchEvent(new Event('input'));
+    check('part search accepts box (FFB) codes', /Sample Print Co/.test($('partResults').textContent));
+    $('partQuery').value = 'feed roll'; $('partQuery').dispatchEvent(new Event('input'));
+    check('part search by name lists parts not held anywhere too', $('partResults').querySelectorAll('.part-card').length === 2 && /Not at any site/.test($('partResults').textContent));
+
+    // Sites list and one site's stock
+    document.querySelector('[data-admin-tab=sites]').click();
+    check('sites tab lists every site', $('siteList').children.length === 2 && $('siteCount').textContent === '2 of 2 sites', $('siteCount').textContent);
+    $('siteQuery').value = 'bradford'; $('siteQuery').dispatchEvent(new Event('input'));
+    check('site search by town', $('siteList').children.length === 1 && /Demo Graphics/.test($('siteList').textContent));
+    $('siteQuery').value = ''; $('siteQuery').dispatchEvent(new Event('input'));
+    [...$('siteList').querySelectorAll('li')].find(li => /Sample Print Co/.test(li.textContent)).click();
+    check('site detail shows its stock and printer', !$('admin-site').hidden && /Tray 1\/2 Feed Roll/.test($('siteDetailStock').textContent) && /PC1120/.test($('siteDetailHead').textContent));
+    check('site detail links to the site in the app', $('siteDetailOpen').getAttribute('href').endsWith('?s=' + site.Token));
+    $('siteBack').click();
+    check('back returns to the sites list', !$('admin-sites').hidden && $('admin-site').hidden);
+
+    // QR codes: built on demand, untick to leave out of the print
+    document.querySelector('[data-admin-tab=qr]').click();
+    check('QR tab shows a card per site', await waitFor(() => $('qrGrid').querySelectorAll('.qr-card svg').length === 2));
+    const link = [...$('qrGrid').querySelectorAll('.qr-card a')].map(a => a.getAttribute('href')).find(h => h.includes(site.Token)) || '';
     check('QR link opens the site', link.endsWith('?s=' + site.Token), link);
+    const tick = $('qrGrid').querySelector('.qr-card input');
+    tick.click();
+    check('unticked site is left out of the print', tick.closest('.qr-card').classList.contains('skip'));
 
     // ---- New-part sheet has no stray text ----
     $('doneHome').click();

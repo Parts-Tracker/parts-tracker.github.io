@@ -159,15 +159,53 @@
       <div class="footer-bar"><button class="btn" id="stockBack">Back</button></div>
     </section>
 
-    <!-- Admin -->
+    <!-- Admin dashboard -->
     <section class="view" id="view-admin" hidden>
-      <h1>Admin</h1>
-      <p class="muted" id="adminSummary"></p>
-      <div class="row3 no-print">
-        <button class="btn primary" id="printQr">Print QR codes</button>
-        <button class="btn" id="adminRefresh">Refresh</button>
+      <div class="admin-head no-print">
+        <h1>Admin dashboard</h1>
+        <button class="small" id="adminRefresh">Refresh</button>
       </div>
-      <div class="qr-grid" id="qrGrid"></div>
+      <p class="muted no-print" id="adminSummary"></p>
+      <div class="stat-grid no-print" id="adminStats"></div>
+      <div class="tabs no-print" role="tablist">
+        <button role="tab" data-admin-tab="find" aria-selected="true">Find a part</button>
+        <button role="tab" data-admin-tab="sites" aria-selected="false">Sites</button>
+        <button role="tab" data-admin-tab="qr" aria-selected="false">QR codes</button>
+      </div>
+
+      <div class="admin-panel" id="admin-find">
+        <input id="partQuery" class="input" placeholder="Part code or name, e.g. 059K6158 or feed roll" autocomplete="off">
+        <div id="partResults"></div>
+      </div>
+
+      <div class="admin-panel" id="admin-sites" hidden>
+        <div class="filter-row">
+          <input id="siteQuery" class="input" placeholder="Name, town, postcode or printer" autocomplete="off">
+          <select id="siteSort" aria-label="Sort sites">
+            <option value="name">A to Z</option>
+            <option value="items">Most stock</option>
+            <option value="count">Longest since count</option>
+          </select>
+        </div>
+        <p class="muted" id="siteCount"></p>
+        <div class="card"><ul class="list" id="siteList"></ul></div>
+      </div>
+
+      <div class="admin-panel" id="admin-site" hidden>
+        <button class="small no-print" id="siteBack">‹ All sites</button>
+        <div class="hero" id="siteDetailHead"></div>
+        <div class="card">
+          <h2 class="section-title">Stock</h2>
+          <ul class="list" id="siteDetailStock"></ul>
+        </div>
+        <a class="btn" id="siteDetailOpen">Open this site in the app</a>
+      </div>
+
+      <div class="admin-panel" id="admin-qr" hidden>
+        <div class="row3 no-print"><button class="btn primary" id="printQr">Print QR codes</button></div>
+        <p class="muted no-print">Prints three per row. Untick any sites you do not want to print.</p>
+        <div class="qr-grid" id="qrGrid"></div>
+      </div>
     </section>
   </main>
 

@@ -1,5 +1,5 @@
 /* Offline support: keeps the app files on the phone. Data requests always go to the network. */
-const CACHE = 'pt-v11';
+const CACHE = 'pt-v12';
 const FILES = [
   './', 'index.html', 'app.css', 'config.js', 'codes.js', 'scanner.js', 'app.js', 'icon.svg', 'manifest.webmanifest',
   'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js',

@@ -215,26 +215,46 @@ function actionSubmit(req) {
   }
 }
 
-/** Admin data: every site with its QR token, stock size and last count. */
+/**
+ * Admin dashboard data in one request: every active site (QR token, town, printers, last count,
+ * last activity), every non-zero stock line across all sites, and part names for the search.
+ * stock rows are [siteIndex, family, qty] to keep the response small.
+ */
 function actionAdmin(req) {
   const user = sessionUser_(req.session, false);
   if (String(user.Role).toLowerCase() !== 'admin') throw err_('forbidden', 'Admins only.');
   ensureSiteTokens_();
+  const iTime = SHEETS.Movements.indexOf('Timestamp');
   const lines = {};
+  const lastActivity = {};
   movementColumns_().forEach(m => {
     const k = m.site + '|' + m.family;
     lines[k] = (lines[k] || 0) + m.qty;
+    const t = m.row[iTime];
+    if (t instanceof Date && (!lastActivity[m.site] || t > lastActivity[m.site])) lastActivity[m.site] = t;
   });
+  const printers = {};
+  readTable_('Printers').forEach(p => { (printers[String(p.SiteID)] = printers[String(p.SiteID)] || []).push(String(p.Model)); });
+  const sites = readTable_('Sites').filter(s => isTrue_(s.Active) && s.Name);
+  const index = {};
+  sites.forEach((s, i) => { index[String(s.SiteID)] = i; });
+  const stock = [];
   const totals = {};
   Object.keys(lines).forEach(k => {
-    const site = k.split('|')[0];
+    const [site, family] = k.split('|');
+    if (index[site] === undefined || !lines[k]) return;
+    stock.push([index[site], family, lines[k]]);
     if (lines[k] > 0) totals[site] = (totals[site] || 0) + lines[k];
   });
   const parts = readTable_('Parts');
   return {
-    sites: readTable_('Sites').filter(s => isTrue_(s.Active)).map(s => ({
-      id: s.SiteID, name: s.Name, postcode: s.Postcode, token: s.Token, items: totals[s.SiteID] || 0, lastCount: iso_(s.LastCount)
+    sites: sites.map(s => ({
+      id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token,
+      items: totals[s.SiteID] || 0, lastCount: iso_(s.LastCount), lastActivity: iso_(lastActivity[String(s.SiteID)]),
+      printers: printers[String(s.SiteID)] || []
     })),
+    stock: stock,
+    parts: parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]),
     unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length
   };
 }
