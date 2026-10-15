@@ -77,6 +77,12 @@ function setupSheets_() {
     if (sh.getLastRow() === 0) {
       sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
       sh.setFrozenRows(1);
+    } else {
+      // Tabs made by an older version: add any new columns at the end, leaving existing data alone
+      const have = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+      head.filter(h => have.indexOf(h) < 0).forEach(h => {
+        sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold');
+      });
     }
   });
   // Keep codes and PINs as text so leading zeros survive

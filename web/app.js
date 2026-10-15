@@ -599,6 +599,7 @@
     };
     // Saved on the phone first, shown as done straight away, then sent in the background
     // (the server takes a few seconds, and the phone may have no signal)
+    if (batch.van && mode === 'BOOK_IN') clearOrdered(state.basket.map(b => b.family));
     state.queue.push(batch);
     saveQueue();
     applyLocally(batch);
@@ -770,15 +771,27 @@
     }
   }
 
-  /** Van kit lines below minimum, with how many to order to get back to maximum. */
+  /**
+   * Van kit parts to reorder, using the old Van Kit Manager's rule: a part with a minimum above 0 is short when
+   * stock is at or below that minimum, and the order tops it back up to maximum (at least 1).
+   * Parts already ordered (and not yet booked in) are flagged so they are not ordered twice.
+   */
   function vanShortfall() {
     const have = {};
     (state.van && state.van.stock || []).forEach(s => { have[s.family] = s.qty; });
+    const ordered = orderedParts();
     return (state.van && state.van.kit || []).map(k => Object.assign({ have: have[k.family] || 0 }, k))
-      .filter(k => k.have < k.min)
-      .map(k => Object.assign({ order: k.max - k.have }, k))
+      .filter(k => k.min > 0 && k.have <= k.min)
+      .map(k => Object.assign({ order: Math.max(1, Math.ceil(k.max - k.have)), ordered: ordered.includes(k.family) }, k))
       .sort((a, b) => (partName(a.family) || a.family).localeCompare(partName(b.family) || b.family));
   }
+  const toOrder = () => vanShortfall().filter(k => !k.ordered);
+
+  // Parts sent to the order form are remembered on this phone until they are booked in to the van
+  const orderedKey = () => 'pt_ordered_' + (state.van ? state.van.van.id : '');
+  function orderedParts() { return store.get(orderedKey(), []); }
+  function markOrdered(families) { store.set(orderedKey(), [...new Set(orderedParts().concat(families))]); }
+  function clearOrdered(families) { store.set(orderedKey(), orderedParts().filter(f => !families.includes(f))); }
 
   function renderVan() {
     const v = state.van;
@@ -788,22 +801,23 @@
     $('vanSummary').textContent = items.length ? items.reduce((n, s) => n + s.qty, 0) + ' items, ' + items.length + ' different parts' : 'Nothing booked in yet';
     const kit = v.kit || [];
     const short = vanShortfall();
+    const waiting = short.filter(k => k.ordered).length;
     const status = $('vanKitStatus');
     const list = $('vanKitList'); list.textContent = '';
     if (!kit.length) {
       status.textContent = 'No van kit set up yet. Add parts with Min and Max to the VanKit tab in the Sheet.';
       status.className = 'kit-status muted';
     } else if (!short.length) {
-      status.textContent = 'All ' + kit.length + ' van kit parts are at or above minimum.';
+      status.textContent = 'All ' + kit.length + ' van kit parts are above minimum.';
       status.className = 'kit-status ok';
     } else {
-      status.textContent = short.length + ' of ' + kit.length + ' van kit parts below minimum';
+      status.textContent = short.length + ' of ' + kit.length + ' van kit parts need ordering' + (waiting ? ' (' + waiting + ' already ordered)' : '');
       status.className = 'kit-status low';
       short.forEach(k => list.append(el('li', {},
         el('div', { class: 'item-main' },
           el('div', { class: 'item-name' }, partName(k.family) || 'Unknown part'),
           el('div', { class: 'item-sub' }, k.family + ' · have ' + k.have + ' · min ' + k.min + ' · max ' + k.max)),
-        el('div', { class: 'order-qty' }, 'Order ' + k.order))));
+        el('div', { class: 'order-qty' + (k.ordered ? ' done' : '') }, k.ordered ? 'Ordered' : 'Order ' + k.order))));
     }
     $('vanKitActions').hidden = !short.length;
     renderRecent($('vanRecentList'), v.recent);
@@ -811,28 +825,79 @@
   }
 
   function orderLines() {
-    return vanShortfall().map(k => k.family + '  ' + (partName(k.family) || '') + '  x' + k.order);
+    return toOrder().map(k => k.family + '  ' + (partName(k.family) || '') + '  x' + k.order);
   }
   async function copyOrder() {
-    const text = orderLines().join('\n');
+    const text = orderLines().join('\n') || 'Nothing to order: everything short is already ordered.';
     try { await navigator.clipboard.writeText(text); toast('Order list copied'); }
     catch (e) { openSheet('Order list', [el('pre', { class: 'order-text' }, text), el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]); }
   }
-  /** Opens the Smartsheet order form with the missing parts filled in, once its link is set in config.js. */
+
+  // --- Order review, then the Smartsheet parts order form, filled in as the old Van Kit Manager did ---
+  const FORM_MAX_PARTS = 9;
+  // The form's part fields are not named consistently, so each row's names are listed exactly (including the space after "5 Part Description ")
+  const FORM_PART_FIELDS = [
+    ['1 Part No.', '1 Qty', '1 Description'], ['2 Part No.', '2 Qty', '2 Description'], ['3 Part No.', '3 Qty', '3 Description'],
+    ['4 Part No.', '4 Qty', '4 Description'], ['5 Part code', '5 qty', '5 Part Description '], ['6 part number', '6 Qty', '6 part description'],
+    ['7 part code', '7 qty', '7 part description'], ['8 part code', '8 qty', '8 part description'], ['9 part code', '9 qty', '9 description']
+  ];
+  function smartsheetUrl(lines) {
+    const p = new URLSearchParams();
+    p.append('Parts Reason', 'CAR STOCK');
+    p.append('Urgency', 'Med - As soon as possible');
+    p.append('Pre 10:30', 'No');
+    p.append('ByBox/Collection', 'Yes');
+    p.append('SD CALL No.', 'Van Kit');
+    p.append('Notes', 'Van Kit Replenishment');
+    const tomorrow = new Date(Date.now() + 86400000);
+    p.append('Date Required Onsite', tomorrow.toLocaleDateString('en-GB'));
+    const me = (state.van && state.van.orderDetails) || { name: state.user ? state.user.name : '' };
+    p.append('Customer Name', me.name);
+    p.append('Engineer Name Attending', me.name);
+    p.append('Part Requested By', me.name);
+    if (me.email) { p.append('Engineer Email', me.email); p.append('Email', me.email); p.append('Send me a copy of my responses', 'true'); }
+    if (me.postcode) p.append('Post Code', me.postcode);
+    if (me.byBox) p.append('ByBox Location / Collection Point', me.byBox.replace(/My ByBox location is\s*/i, '').trim());
+    lines.slice(0, FORM_MAX_PARTS).forEach((l, i) => {
+      const [part, qty, desc] = FORM_PART_FIELDS[i];
+      p.append(part, l.family);
+      p.append(qty, String(l.qty));
+      p.append(desc, partName(l.family) || '');
+    });
+    if (lines.length > 4) p.append('Order Additional Parts', 'true');
+    return CFG.orderFormUrl + (CFG.orderFormUrl.includes('?') ? '&' : '?') + p.toString();
+  }
+
+  /** "Order parts": review what is short (change quantities, remove lines), then open the order form. */
   function orderParts() {
-    if (!CFG.orderFormUrl) {
-      toast('The Smartsheet order form is not linked yet. Use Copy order list for now.');
-      return;
-    }
-    const params = new URLSearchParams();
-    Object.entries(CFG.orderFormFields || {}).forEach(([field, value]) => {
-      if (value === '{engineer}') params.set(field, state.user ? state.user.name : '');
-    });
-    vanShortfall().forEach(k => {
-      const field = (CFG.orderFormParts || {})[k.family];
-      if (field) params.set(field, String(k.order));
-    });
-    window.open(CFG.orderFormUrl + (CFG.orderFormUrl.includes('?') ? '&' : '?') + params.toString(), '_blank');
+    const lines = toOrder().map(k => ({ family: k.family, qty: k.order }));
+    if (!lines.length) { toast(vanShortfall().length ? 'Everything short is already ordered.' : 'Nothing needs ordering.'); return; }
+    const list = el('ul', { class: 'list' });
+    const note = el('p', { class: 'muted' });
+    const render = () => {
+      list.textContent = '';
+      lines.forEach((l, i) => list.append(el('li', {},
+        el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, partName(l.family) || 'Unknown part'), el('div', { class: 'item-sub mono' }, l.family)),
+        el('div', { class: 'stepper' },
+          el('button', { 'aria-label': 'One less', onclick: () => { if (l.qty > 1) l.qty--; else lines.splice(i, 1); render(); } }, '−'),
+          el('span', { class: 'qty' }, l.qty),
+          el('button', { 'aria-label': 'One more', onclick: () => { l.qty++; render(); } }, '+')))));
+      note.textContent = lines.length > FORM_MAX_PARTS
+        ? 'The order form takes ' + FORM_MAX_PARTS + ' parts. The first ' + FORM_MAX_PARTS + ' go on this order; order the rest afterwards.'
+        : lines.length + (lines.length === 1 ? ' part' : ' parts') + ' will be filled in on the order form.';
+      send.disabled = !lines.length;
+    };
+    const send = el('button', { class: 'primary', onclick: () => {
+      const sent = lines.slice(0, FORM_MAX_PARTS);
+      if (!CFG.orderFormUrl) { toast('The order form link is missing from config.js.'); return; }
+      window.open(smartsheetUrl(sent), '_blank');
+      markOrdered(sent.map(l => l.family));
+      closeSheet();
+      renderVan();
+      toast('Order form opened. Check it and press Submit in Smartsheet.');
+    } }, 'Open order form');
+    openSheet('Order van stock', [note, list, el('div', { class: 'buttons' }, send, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    render();
   }
 
   /** Site / My van switch, shown to signed-in engineers on the two home screens. */
@@ -1150,7 +1215,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl };
 
   init();
 })();

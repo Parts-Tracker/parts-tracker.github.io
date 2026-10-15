@@ -265,3 +265,4 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .kit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .order-text { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.85rem; background: var(--bg); padding: 10px; border-radius: 8px; }
 #nositeVan { margin-top: 10px; }
+.order-qty.done { color: var(--text-muted); font-weight: 600; }

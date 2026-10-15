@@ -17,7 +17,7 @@ const SHEETS = {
   Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Contact', 'Phone', 'Token', 'Active', 'LastCount'],
   Printers: ['SiteID', 'Model', 'Serial'],
   Parts: ['Family', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
-  Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active'],
+  Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Family', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
   Kits: ['Model', 'Family', 'Qty'],
   VanKit: ['Family', 'Min', 'Max']   // one van kit for every engineer
@@ -247,6 +247,7 @@ function actionVan(req) {
   const names = partNames_(parts);
   const out = {
     van: { id: loc, name: user.Name },
+    orderDetails: { name: user.Name, email: user.Email || '', postcode: user.Postcode || '', byBox: user.ByBox || '' },
     stock: stockList_(loc, names),
     recent: recentMovements_(loc, names, 10),
     kit: vanKit_(),
@@ -439,7 +440,8 @@ function cachedUsers_(refresh) {
   const hit = refresh ? null : cache.get('users:v1');
   if (hit) return JSON.parse(hit);
   const users = readTable_('Users').map(u => ({
-    UserID: String(u.UserID), Name: String(u.Name), Role: String(u.Role).toLowerCase(), PinHash: String(u.PinHash || ''), Active: isTrue_(u.Active)
+    UserID: String(u.UserID), Name: String(u.Name), Role: String(u.Role).toLowerCase(), PinHash: String(u.PinHash || ''), Active: isTrue_(u.Active),
+    Email: String(u.Email || ''), Postcode: String(u.Postcode || ''), ByBox: String(u.ByBox || '')
   }));
   cache.put('users:v1', JSON.stringify(users), USERS_CACHE_SECONDS);
   return users;

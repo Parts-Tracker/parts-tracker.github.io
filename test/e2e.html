@@ -190,8 +190,29 @@
     check('back to the van after sending', await waitFor(() => visible('view-van')));
     check('kit check updated: only the nudger roll is short', await waitFor(() => JSON.stringify(A.vanShortfall().map(k => k.family)) === '["P059K5813X"]'), A.vanShortfall());
     check('order list for copying', A.orderLines().length === 1 && /P059K5813X/.test(A.orderLines()[0]) && /x2$/.test(A.orderLines()[0]), A.orderLines());
+    // Order parts: review, then the Smartsheet form opens filled in
+    window.PT_CONFIG.orderFormUrl = 'https://app.smartsheet.com/b/form/TESTFORM';
+    let opened = null;
+    window.open = url => { opened = url; };
     $('orderParts').click();
-    check('order button explains the form is not linked yet', /not linked yet/.test($('toast').textContent), $('toast').textContent);
+    check('order parts opens a review list', await waitFor(() => $('sheetTitle').textContent === 'Order van stock' && $('sheetBody').querySelectorAll('li').length === 1));
+    [...$('sheetBody').querySelectorAll('button')].find(b => b.textContent === 'Open order form').click();
+    const form = opened ? new URL(opened) : null;
+    const f = k => form && form.searchParams.get(k);
+    check('order form link goes to the Smartsheet form', form && form.origin + form.pathname === 'https://app.smartsheet.com/b/form/TESTFORM', opened);
+    check('order form fixed fields filled in', f('Parts Reason') === 'CAR STOCK' && f('SD CALL No.') === 'Van Kit' && f('ByBox/Collection') === 'Yes' && f('Customer Name') === 'Test Engineer');
+    check('order form part line filled in', f('1 Part No.') === 'P059K5813X' && f('1 Qty') === '2' && f('1 Description') === 'Tray 1/2 Feed Roll - Nudger', [f('1 Part No.'), f('1 Qty'), f('1 Description')]);
+    check('ordered part is flagged and not ordered again', await waitFor(() => /Ordered/.test($('vanKitList').textContent)) && A.orderLines().length === 0);
+    const sixParts = ['5 Part code', '5 qty', '5 Part Description '].every(k => new URL(A.smartsheetUrl([1, 2, 3, 4, 5].map(i => ({ family: 'P059K6158X', qty: i })))).searchParams.has(k));
+    check('form row 5 uses its own field names (incl. trailing space)', sixParts);
+    document.querySelector('[data-van-mode=BOOK_IN]').click();
+    await waitFor(() => visible('view-scan'));
+    A.handleCode('059K58130', 'barcode'); A.handleCode('059K58130', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    $('reviewSend').click();
+    await waitFor(() => visible('view-done')); await saved();
+    $('doneHome').click();
+    check('booking the ordered part in clears it from the order list', await waitFor(() => visible('view-van') && A.vanShortfall().every(k => k.family !== 'P059K5813X')), A.vanShortfall());
 
     document.querySelector('[data-van-mode=USED]').click();
     await waitFor(() => visible('view-scan'));
