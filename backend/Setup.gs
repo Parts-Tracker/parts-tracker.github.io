@@ -83,6 +83,7 @@ function setupSheets_() {
   ss.getSheetByName('Users').getRange('D:D').setNumberFormat('@');
   ss.getSheetByName('Parts').getRange('A:C').setNumberFormat('@');
   ss.getSheetByName('Movements').getRange('D:E').setNumberFormat('@');
+  ss.getSheetByName('VanKit').getRange('A:A').setNumberFormat('@');
 }
 
 function duplicatePins_() {

@@ -19,7 +19,8 @@ const SHEETS = {
   Parts: ['Family', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active'],
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Family', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
-  Kits: ['Model', 'Family', 'Qty']
+  Kits: ['Model', 'Family', 'Qty'],
+  VanKit: ['Family', 'Min', 'Max']   // one van kit for every engineer
 };
 
 // Which movement types each role may record, and the sign of their quantity
@@ -63,7 +64,8 @@ const ACTIONS = {
   bootstrap: actionBootstrap,
   login: actionLogin,
   submit: actionSubmit,
-  admin: actionAdmin
+  admin: actionAdmin,
+  van: actionVan
 };
 
 // ---------------------------------------------------------------- actions
@@ -123,8 +125,12 @@ function actionLogin(req) {
  * For COUNT, items are the counted quantities and `zero` lists families to set to 0.
  */
 function actionSubmit(req) {
-  const site = siteFromToken_(req.site);
+  // A batch is for a site (QR token) or for the signed-in engineer's own van (req.van)
+  const site = req.van ? null : siteFromToken_(req.site);
   const user = req.session ? sessionUser_(req.session, false) : null;
+  if (req.van && !user) throw err_('forbidden', 'Sign in with your PIN to use your van stock.');
+  if (req.van && VAN_TYPES.indexOf(String(req.type)) < 0) throw err_('bad_request', 'That action is not available for van stock.');
+  const locId = req.van ? vanId_(user) : site.SiteID;
   const role = user ? String(user.Role).toLowerCase() : 'customer';
   const by = user ? user.Name : 'Customer';
   const type = String(req.type || '');
@@ -143,7 +149,7 @@ function actionSubmit(req) {
   try {
     // The phone retries batches it could not confirm, so ignore one already recorded
     if (batchSeen_(batchId)) {
-      return { duplicate: true, stock: stockList_(site.SiteID, partNames_(readTable_('Parts'))) };
+      return { duplicate: true, stock: stockList_(locId, partNames_(readTable_('Parts'))) };
     }
 
     // Normalise codes and add any new parts to the catalogue (marked unreviewed)
@@ -173,11 +179,11 @@ function actionSubmit(req) {
     const note = String(req.note || '').slice(0, 200);
     const rows = [];
     const row = (family, exact, qty, rowNote) => rows.push({
-      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: site.SiteID, Family: family, ExactCode: exact,
+      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: locId, Family: family, ExactCode: exact,
       Qty: qty, Type: type, JobNo: jobNo, By: by, Role: role, Device: device, Note: rowNote || note, BatchID: batchId
     });
 
-    const current = stockBySite_(site.SiteID);
+    const current = stockBySite_(locId);
     const warnings = [];
     if (type === 'COUNT') {
       // Counted lines set the quantity; families in `zero` are set to 0. Only differences are written.
@@ -189,7 +195,7 @@ function actionSubmit(req) {
         const delta = counted[fam] - was;
         if (delta !== 0) row(fam, fam, delta, 'counted ' + counted[fam] + ', was ' + was + (note ? '. ' + note : ''));
       });
-      setSiteField_(site, 'LastCount', now);
+      if (site) setSiteField_(site, 'LastCount', now);
     } else {
       lines.forEach(l => {
         const qty = spec.sign * l.qty;
@@ -209,10 +215,46 @@ function actionSubmit(req) {
     rememberBatch_(batchId);
 
     const names = partNames_(readTable_('Parts'));
-    return { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, stock: stockList_(site.SiteID, names) };
+    return { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, stock: stockList_(locId, names) };
   } finally {
     lock.releaseLock();
   }
+}
+
+// ---------------------------------------------------------------- vans
+
+const VAN_TYPES = ['BOOK_IN', 'USED', 'COUNT'];
+
+/** Each engineer's van is a stock location named after their UserID. */
+function vanId_(user) {
+  return 'VAN-' + user.UserID;
+}
+
+/** The van kit: one list of parts with minimum and maximum levels, shared by every engineer. */
+function vanKit_() {
+  let rows;
+  try { rows = readTable_('VanKit'); } catch (e) { return []; }   // tab not set up yet
+  return rows.map(r => ({ family: normaliseCode(r.Family).family, min: Number(r.Min) || 0, max: Number(r.Max) || 0 }))
+    .filter(k => k.family && k.max >= k.min);
+}
+
+/** Everything the app needs for the signed-in engineer's van. */
+function actionVan(req) {
+  const user = sessionUser_(req.session, false);
+  if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
+  const loc = vanId_(user);
+  const parts = readTable_('Parts');
+  const names = partNames_(parts);
+  const out = {
+    van: { id: loc, name: user.Name },
+    stock: stockList_(loc, names),
+    recent: recentMovements_(loc, names, 10),
+    kit: vanKit_(),
+    partsVersion: partsVersion_(parts),
+    user: { name: user.Name, role: user.Role }
+  };
+  if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
+  return out;
 }
 
 /**

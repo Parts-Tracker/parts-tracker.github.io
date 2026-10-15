@@ -26,11 +26,61 @@
   <div class="banner hidden" id="banner"></div>
 
   <main>
+    <!-- Engineers: switch between the site they are at and their own van -->
+    <div class="where-switch" id="whereSwitch" role="tablist" hidden>
+      <button role="tab" data-where="site" aria-selected="true">Site</button>
+      <button role="tab" data-where="van" aria-selected="false">My van</button>
+    </div>
+
     <!-- No site: opened without scanning a QR code -->
     <section class="view" id="view-nosite" hidden>
       <div class="card center">
         <h1>Scan the site QR code</h1>
         <p class="muted">Open this app by scanning the QR code on the parts cupboard at the site. It links the app to that site.</p>
+        <button class="btn" id="nositeVan">Engineers: open My van</button>
+      </div>
+    </section>
+
+    <!-- The signed-in engineer's van -->
+    <section class="view" id="view-van" hidden>
+      <div class="hero">
+        <div class="hero-label">My van</div>
+        <h1 class="site-name" id="vanName"></h1>
+        <div class="hero-address" id="vanSummary"></div>
+      </div>
+
+      <button class="action action-main tone-green" data-van-mode="BOOK_IN">
+        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5 12 4l8.5 4.5v8L12 21l-8.5-4.5z"/><path d="M3.5 8.5 12 13l8.5-4.5M12 13v8"/></svg></span>
+        <span class="action-text"><span class="action-title">Book in to my van</span><span class="action-sub">Scan the parts from your ByBox delivery</span></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
+      <div class="action-grid">
+        <button class="action tone-pink" data-van-mode="USED">
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-.4-.4-2.6z"/></svg></span>
+          <span class="action-title">Used on a job</span><span class="action-sub">From my van</span>
+        </button>
+        <button class="action tone-blue" data-van-mode="COUNT">
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12.5l2.2 2.2 4.8-4.8"/></svg></span>
+          <span class="action-title">Van stock count</span><span class="action-sub">Count everything in the van</span>
+        </button>
+      </div>
+
+      <div class="card" id="vanKitCard">
+        <div class="kit-head">
+          <h2 class="section-title">Van kit</h2>
+          <button class="small" id="vanStockBtn">View van stock</button>
+        </div>
+        <p class="kit-status" id="vanKitStatus"></p>
+        <ul class="list" id="vanKitList"></ul>
+        <div class="kit-actions" id="vanKitActions" hidden>
+          <button class="btn primary" id="orderParts">Order parts</button>
+          <button class="btn" id="copyOrder">Copy order list</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="section-title">Recent activity</h2>
+        <ul class="list" id="vanRecentList"></ul>
       </div>
     </section>
 
@@ -150,7 +200,7 @@
     <!-- Stock -->
     <section class="view" id="view-stock" hidden>
       <span class="mode-pill tone-lime">View stock</span>
-      <h1>Stock at this site</h1>
+      <h1 id="stockTitle">Stock at this site</h1>
       <input id="stockFilter" class="input" placeholder="Filter by name or code" autocomplete="off">
       <div class="card">
         <ul class="list" id="stockList"></ul>

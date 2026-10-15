@@ -39,6 +39,8 @@
     queue: store.get('pt_queue', []),
     sending: false,
     scanner: null,
+    where: 'site',                    // 'site' or 'van': which stock the scan screens work on
+    van: store.get('pt_van', null),
     view: null
   };
 
@@ -155,6 +157,7 @@
     if (state.view === 'view-scan' && id !== 'view-scan' && state.scanner) state.scanner.stop();
     if (state.view !== id) hideToast();
     state.view = id;
+    renderWhereSwitch(id);
     window.scrollTo(0, 0);
   }
 
@@ -194,15 +197,19 @@
     const parts = (d.stock || []).filter(s => s.qty > 0);
     const total = parts.reduce((n, s) => n + s.qty, 0);
     $('stockSummary').textContent = parts.length ? total + ' items, ' + parts.length + ' different parts' : 'Nothing recorded yet';
-    const rl = $('recentList'); rl.textContent = '';
-    if (!(d.recent || []).length) rl.append(el('li', { class: 'muted' }, 'No activity yet.'));
-    (d.recent || []).forEach(r => rl.append(el('li', {},
+    renderRecent($('recentList'), d.recent);
+    renderBanner();
+  }
+
+  function renderRecent(rl, recent) {
+    rl.textContent = '';
+    if (!(recent || []).length) rl.append(el('li', { class: 'muted' }, 'No activity yet.'));
+    (recent || []).forEach(r => rl.append(el('li', {},
       activityIcon(r),
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, r.name || r.family),
         el('div', { class: 'item-sub' }, [TYPE_LABEL[r.type] || r.type, r.by, r.jobNo ? 'job ' + r.jobNo : '', r.pending ? 'waiting to send' : when(r.at)].filter(Boolean).join(' · '))),
       el('div', { class: 'qty' + (r.qty < 0 ? ' neg' : '') }, (r.qty > 0 ? '+' : '') + r.qty))));
-    renderBanner();
   }
 
   const ARROW_IN = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
@@ -229,7 +236,7 @@
     setInterval(() => syncQueue(), 60000);
     if (params.has('admin')) return openAdmin();
     state.site = fromQr || store.get('pt_site', null);
-    if (!state.site) { show('view-nosite'); return; }
+    if (!state.site) { if (isEngineer()) openVan(); else show('view-nosite'); return; }
     await loadSite();
     syncQueue();
   }
@@ -280,6 +287,8 @@
     state.session = null; state.user = null;
     store.del('pt_session'); store.del('pt_user');
     renderUserChip(); renderHome();
+    if (state.where === 'van') { state.where = 'site'; goHome(); }
+    else renderWhereSwitch(state.view);
     if (!quiet) toast('Signed out');
   }
 
@@ -367,10 +376,11 @@
     }
     state.mode = mode;
     state.basket = [];
-    $('scanTitle').textContent = MODES[mode].title;
+    const words = state.where === 'van' ? VAN_MODES[mode] : MODES[mode];
+    $('scanTitle').textContent = words.title;
     setPill('scanPill', mode);
     $('view-scan').className = 'view tone-' + TONES[mode];
-    $('scanHint').textContent = MODES[mode].hint;
+    $('scanHint').textContent = words.hint;
     $('basketTitle').textContent = mode === 'COUNT' ? 'Counted' : 'Scanned';
     renderBasket();
     show('view-scan');
@@ -546,10 +556,10 @@
   // ---------- Review and send ----------
   function openReview() {
     const mode = state.mode;
-    $('reviewTitle').textContent = MODES[mode].title;
+    $('reviewTitle').textContent = (state.where === 'van' ? VAN_MODES[mode] : MODES[mode]).title;
     setPill('reviewPill', mode);
     const stock = {};
-    (state.data && state.data.stock || []).forEach(s => { stock[s.family] = s.qty; });
+    (cur() && cur().stock || []).forEach(s => { stock[s.family] = s.qty; });
     const list = $('reviewList'); list.textContent = '';
     if (!state.basket.length) list.append(el('li', { class: 'muted' }, 'Nothing scanned.'));
     state.basket.forEach(b => list.append(el('li', {},
@@ -580,7 +590,8 @@
     if (!state.basket.length && !zero.length) { err.textContent = 'Nothing to send.'; err.hidden = false; return; }
     $('reviewSend').disabled = true;
     const batch = {
-      batchId: uuid(), site: state.site, siteName: state.data ? state.data.site.name : '', type: mode, jobNo,
+      batchId: uuid(), van: state.where === 'van' || undefined, site: state.where === 'van' ? null : state.site,
+      siteName: state.where === 'van' ? 'your van' : (state.data ? state.data.site.name : ''), type: mode, jobNo,
       note: $('note').value.trim(), device: deviceLabel(), createdAt: new Date().toISOString(),
       by: state.user ? state.user.name : 'Customer',
       items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined })),
@@ -599,9 +610,10 @@
 
   /** Updates the site's stock and recent activity on the phone before the server confirms. */
   function applyLocally(batch) {
-    if (!state.data || batch.site !== state.site) return;
+    const target = batch.van ? state.van : (state.data && batch.site === state.site ? state.data : null);
+    if (!target) return;
     const stock = {};
-    (state.data.stock || []).forEach(s => { stock[s.family] = Object.assign({}, s); });
+    (target.stock || []).forEach(s => { stock[s.family] = Object.assign({}, s); });
     const sign = { BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1 }[batch.type];
     const recent = [];
     const add = (family, name, qty) => {
@@ -613,10 +625,10 @@
     };
     batch.items.forEach(it => add(C.normalise(it.code).family, it.name, it.qty));
     if (batch.type === 'COUNT') (batch.zero || []).forEach(f => { if (!batch.items.some(it => C.normalise(it.code).family === f)) add(f, '', 0); });
-    state.data.stock = Object.values(stock).filter(s => s.qty !== 0).sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
-    state.data.recent = recent.concat(state.data.recent || []).slice(0, 10);
-    store.set('pt_boot_' + state.site, state.data);
-    renderHome();
+    target.stock = Object.values(stock).filter(s => s.qty !== 0).sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
+    target.recent = recent.concat(target.recent || []).slice(0, 10);
+    if (batch.van) { store.set('pt_van', state.van); renderVan(); }
+    else { store.set('pt_boot_' + state.site, state.data); renderHome(); }
   }
 
   function showDone(batch) {
@@ -625,6 +637,7 @@
     $('doneText').textContent = batch.type === 'COUNT'
       ? 'Stock updated for ' + batch.siteName + '.'
       : batch.count + (batch.count === 1 ? ' part' : ' parts') + ' recorded at ' + batch.siteName + '.';
+    $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
     $('doneStatus').textContent = 'Sending…';
     $('doneStatus').className = 'send-status';
     $('doneWarn').hidden = true;
@@ -632,7 +645,7 @@
   }
 
   function belowZeroText(families) {
-    return 'Stock went below zero for: ' + families.map(f => partName(f) || f).join(', ') + '. This site probably needs a stock count.';
+    return 'Stock went below zero for: ' + families.map(f => partName(f) || f).join(', ') + (state.where === 'van' ? '. Your van probably needs a stock count.' : '. This site probably needs a stock count.');
   }
 
   /** Shows how the background send went: on the done screen if it is still open, otherwise as a message. */
@@ -675,7 +688,11 @@
       const r = await api(Object.assign({ action: 'submit', session: state.session }, batch));
       if (r.ok) {
         state.queue = state.queue.filter(q => q.batchId !== batch.batchId);
-        if (state.data && batch.site === state.site) {
+        if (batch.van && state.van) {
+          state.van.stock = r.stock;
+          store.set('pt_van', state.van);
+          loadVan();
+        } else if (state.data && batch.site === state.site) {
           state.data.stock = r.stock;
           store.set('pt_boot_' + state.site, state.data);
           loadSite();
@@ -713,14 +730,137 @@
     saveQueue();
   }
 
+  // ---------- My van ----------
+  // Each signed-in engineer has their own van stock (no QR code). The van kit (min/max per part) is shared by everyone.
+  const VAN_MODES = {
+    BOOK_IN: { title: 'Book in to my van', hint: 'Scan each part from your ByBox delivery.' },
+    USED: { title: 'Used on a job', hint: 'Scan each part you fitted from your van.' },
+    COUNT: { title: 'Van stock count', hint: 'Scan everything in the van. Use + when there is more than one.' }
+  };
+  const cur = () => (state.where === 'van' ? state.van : state.data);
+
+  async function openVan() {
+    if (!isEngineer()) { askPin(openVan, 'Engineer sign in'); return; }
+    state.where = 'van';
+    if (state.van) renderVan();
+    show('view-van');
+    await loadVan();
+  }
+
+  async function loadVan() {
+    try {
+      const r = await api({ action: 'van', session: state.session, partsVersion: state.partsVersion });
+      if (!r.ok) {
+        if (r.code === 'session') { signOut(true); askPin(openVan, 'Engineer sign in'); }
+        else toast(r.error);
+        return;
+      }
+      if (r.parts) saveParts(r.partsVersion, r.parts);
+      delete r.parts;
+      state.van = r;
+      state.offline = false;
+      // Van records still waiting to send are not on the server yet
+      state.queue.filter(q => q.van).forEach(applyLocally);
+      store.set('pt_van', state.van);
+      renderVan();
+    } catch (e) {
+      state.offline = e.code === 'offline';
+      if (!state.van) toast(state.offline ? 'No connection. Your van loads once you have signal.' : e.message);
+      renderBanner();
+    }
+  }
+
+  /** Van kit lines below minimum, with how many to order to get back to maximum. */
+  function vanShortfall() {
+    const have = {};
+    (state.van && state.van.stock || []).forEach(s => { have[s.family] = s.qty; });
+    return (state.van && state.van.kit || []).map(k => Object.assign({ have: have[k.family] || 0 }, k))
+      .filter(k => k.have < k.min)
+      .map(k => Object.assign({ order: k.max - k.have }, k))
+      .sort((a, b) => (partName(a.family) || a.family).localeCompare(partName(b.family) || b.family));
+  }
+
+  function renderVan() {
+    const v = state.van;
+    if (!v) return;
+    $('vanName').textContent = v.van.name;
+    const items = (v.stock || []).filter(s => s.qty > 0);
+    $('vanSummary').textContent = items.length ? items.reduce((n, s) => n + s.qty, 0) + ' items, ' + items.length + ' different parts' : 'Nothing booked in yet';
+    const kit = v.kit || [];
+    const short = vanShortfall();
+    const status = $('vanKitStatus');
+    const list = $('vanKitList'); list.textContent = '';
+    if (!kit.length) {
+      status.textContent = 'No van kit set up yet. Add parts with Min and Max to the VanKit tab in the Sheet.';
+      status.className = 'kit-status muted';
+    } else if (!short.length) {
+      status.textContent = 'All ' + kit.length + ' van kit parts are at or above minimum.';
+      status.className = 'kit-status ok';
+    } else {
+      status.textContent = short.length + ' of ' + kit.length + ' van kit parts below minimum';
+      status.className = 'kit-status low';
+      short.forEach(k => list.append(el('li', {},
+        el('div', { class: 'item-main' },
+          el('div', { class: 'item-name' }, partName(k.family) || 'Unknown part'),
+          el('div', { class: 'item-sub' }, k.family + ' · have ' + k.have + ' · min ' + k.min + ' · max ' + k.max)),
+        el('div', { class: 'order-qty' }, 'Order ' + k.order))));
+    }
+    $('vanKitActions').hidden = !short.length;
+    renderRecent($('vanRecentList'), v.recent);
+    renderBanner();
+  }
+
+  function orderLines() {
+    return vanShortfall().map(k => k.family + '  ' + (partName(k.family) || '') + '  x' + k.order);
+  }
+  async function copyOrder() {
+    const text = orderLines().join('\n');
+    try { await navigator.clipboard.writeText(text); toast('Order list copied'); }
+    catch (e) { openSheet('Order list', [el('pre', { class: 'order-text' }, text), el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]); }
+  }
+  /** Opens the Smartsheet order form with the missing parts filled in, once its link is set in config.js. */
+  function orderParts() {
+    if (!CFG.orderFormUrl) {
+      toast('The Smartsheet order form is not linked yet. Use Copy order list for now.');
+      return;
+    }
+    const params = new URLSearchParams();
+    Object.entries(CFG.orderFormFields || {}).forEach(([field, value]) => {
+      if (value === '{engineer}') params.set(field, state.user ? state.user.name : '');
+    });
+    vanShortfall().forEach(k => {
+      const field = (CFG.orderFormParts || {})[k.family];
+      if (field) params.set(field, String(k.order));
+    });
+    window.open(CFG.orderFormUrl + (CFG.orderFormUrl.includes('?') ? '&' : '?') + params.toString(), '_blank');
+  }
+
+  /** Site / My van switch, shown to signed-in engineers on the two home screens. */
+  function renderWhereSwitch(id) {
+    const sw = $('whereSwitch');
+    sw.hidden = !(isEngineer() && (id === 'view-home' || id === 'view-van'));
+    sw.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String((b.dataset.where === 'van') === (id === 'view-van'))));
+    sw.querySelector('[data-where=site]').disabled = !state.data;
+  }
+  function goHome() {
+    if (state.where === 'van' && isEngineer()) { renderVan(); show('view-van'); }
+    else if (state.data) { state.where = 'site'; renderHome(); show('view-home'); }
+    else show('view-nosite');
+  }
+
   // ---------- Stock view ----------
   function renderStock() {
     const q = $('stockFilter').value.trim().toLowerCase();
     const list = $('stockList'); list.textContent = '';
-    const rows = (state.data && state.data.stock || []).filter(s => !q || (s.name || '').toLowerCase().includes(q) || s.family.toLowerCase().includes(q.replace(/\s/g, '')));
+    const inVan = state.where === 'van';
+    $('stockTitle').textContent = inVan ? 'Stock in my van' : 'Stock at this site';
+    const kit = {};
+    if (inVan) (state.van && state.van.kit || []).forEach(k => { kit[k.family] = k; });
+    const rows = (cur() && cur().stock || []).filter(s => !q || (s.name || '').toLowerCase().includes(q) || s.family.toLowerCase().includes(q.replace(/\s/g, '')));
     rows.forEach(s => list.append(el('li', {},
-      el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'), el('div', { class: 'item-sub mono' }, s.family)),
-      el('div', { class: 'qty' + (s.qty < 0 ? ' neg' : '') }, s.qty))));
+      el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'),
+        el('div', { class: 'item-sub mono' }, s.family + (kit[s.family] ? ' · min ' + kit[s.family].min + ' · max ' + kit[s.family].max : ''))),
+      el('div', { class: 'qty' + (s.qty < 0 || (kit[s.family] && s.qty < kit[s.family].min) ? ' neg' : '') }, s.qty))));
     $('stockEmpty').hidden = rows.length > 0;
   }
 
@@ -943,10 +1083,18 @@
     if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', renderThemeButton);
     renderThemeButton();
     $('userChip').addEventListener('click', () => state.user ? signOut() : askPin(null));
-    document.querySelectorAll('.action[data-mode]').forEach(b => b.addEventListener('click', () => startMode(b.dataset.mode)));
-    $('viewStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
+    document.querySelectorAll('.action[data-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'site'; startMode(b.dataset.mode); }));
+    document.querySelectorAll('.action[data-van-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'van'; startMode(b.dataset.vanMode); }));
+    document.querySelectorAll('#whereSwitch button').forEach(b => b.addEventListener('click', () => {
+      if (b.dataset.where === 'van') openVan(); else { state.where = 'site'; goHome(); }
+    }));
+    $('nositeVan').addEventListener('click', openVan);
+    $('vanStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
+    $('orderParts').addEventListener('click', orderParts);
+    $('copyOrder').addEventListener('click', copyOrder);
+    $('viewStockBtn').addEventListener('click', () => { state.where = 'site'; $('stockFilter').value = ''; renderStock(); show('view-stock'); });
     $('stockFilter').addEventListener('input', renderStock);
-    $('stockBack').addEventListener('click', () => show('view-home'));
+    $('stockBack').addEventListener('click', goHome);
     $('zoom').addEventListener('input', e => state.scanner && state.scanner.applyZoom(Number(e.target.value)));
     $('torchBtn').addEventListener('click', () => state.scanner && state.scanner.torch());
     $('cameraSelect').addEventListener('change', e => startCamera(e.target.value));
@@ -960,7 +1108,7 @@
     $('scanNext').addEventListener('click', openReview);
     $('reviewBack').addEventListener('click', () => { show('view-scan'); startCamera(); });
     $('reviewSend').addEventListener('click', sendReview);
-    $('doneHome').addEventListener('click', () => { renderHome(); show('view-home'); });
+    $('doneHome').addEventListener('click', goHome);
     $('sheetBackdrop').addEventListener('click', closeSheet);
     $('printQr').addEventListener('click', () => window.print());
     $('adminRefresh').addEventListener('click', loadAdmin);
@@ -1002,7 +1150,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines };
 
   init();
 })();

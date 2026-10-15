@@ -165,6 +165,54 @@
     const dup = call(Object.assign({ action: 'submit' }, queued));
     check('a resent record is ignored', dup.ok && dup.duplicate && rows('Movements').length === before, dup);
 
+    // ---- My van: the engineer's own stock, no QR code ----
+    appendObjects_('VanKit', [
+      { Family: 'P059K6158X', Min: 2, Max: 4 },
+      { Family: '059K58130', Min: 1, Max: 2 },      // box code: stored as P059K5813X
+      { Family: 'P004E1900X', Min: 0, Max: 1 }
+    ]);
+    $('doneHome').click();
+    check('engineer sees the Site / My van switch', await waitFor(() => !$('whereSwitch').hidden));
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    check('My van opens for the signed-in engineer', await waitFor(() => visible('view-van') && $('vanName').textContent === 'Test Engineer'), $('vanName').textContent);
+    check('empty van: kit lists the parts below minimum', await waitFor(() => $('vanKitList').children.length === 2), $('vanKitStatus').textContent);
+    check('order quantity tops up to maximum', /Order 4/.test($('vanKitList').textContent) && /Order 2/.test($('vanKitList').textContent), $('vanKitList').textContent);
+
+    document.querySelector('[data-van-mode=BOOK_IN]').click();
+    check('van book-in screen', await waitFor(() => visible('view-scan') && $('scanTitle').textContent === 'Book in to my van'));
+    A.handleCode('FFB059K61580', 'barcode'); A.handleCode('P059K6158X', 'barcode'); A.handleCode('P059K6158X', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    $('reviewSend').click();
+    check('van book-in saved', await waitFor(() => visible('view-done') && $('doneHome').textContent === 'Back to my van') && await saved());
+    check('stock recorded against the van', stockOf('VAN-E01', 'P059K6158X') === 3 && rows('Movements').some(m => m.SiteID === 'VAN-E01' && m.By === 'Test Engineer' && m.Type === 'BOOK_IN'));
+    check('site stock not changed by a van book-in', stockOf(site.SiteID, 'P059K6158X') === 3);
+    $('doneHome').click();
+    check('back to the van after sending', await waitFor(() => visible('view-van')));
+    check('kit check updated: only the nudger roll is short', await waitFor(() => JSON.stringify(A.vanShortfall().map(k => k.family)) === '["P059K5813X"]'), A.vanShortfall());
+    check('order list for copying', A.orderLines().length === 1 && /P059K5813X/.test(A.orderLines()[0]) && /x2$/.test(A.orderLines()[0]), A.orderLines());
+    $('orderParts').click();
+    check('order button explains the form is not linked yet', /not linked yet/.test($('toast').textContent), $('toast').textContent);
+
+    document.querySelector('[data-van-mode=USED]').click();
+    await waitFor(() => visible('view-scan'));
+    A.handleCode('P059K6158X', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    $('jobNo').value = 'J2001'; $('reviewSend').click();
+    check('used on a job from the van', await waitFor(() => visible('view-done')) && await saved() && stockOf('VAN-E01', 'P059K6158X') === 2);
+    const usedRow = rows('Movements').find(m => m.SiteID === 'VAN-E01' && m.Type === 'USED');
+    check('van use has the job number', usedRow && usedRow.JobNo === 'J2001' && usedRow.Qty === -1, usedRow);
+
+    const vanStock = call({ action: 'van', session: A.state.session });
+    check('van data comes back for the engineer', vanStock.ok && vanStock.van.id === 'VAN-E01' && vanStock.kit.length === 3, vanStock);
+    const vanNoSignIn = call({ action: 'submit', van: true, batchId: 'v1', type: 'BOOK_IN', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('van needs a signed-in engineer', !vanNoSignIn.ok && vanNoSignIn.code === 'forbidden', vanNoSignIn);
+    const vanFitted = call({ action: 'submit', van: true, session: A.state.session, batchId: 'v2', type: 'CUSTOMER_FITTED', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('customer-fitted is not a van action', !vanFitted.ok && vanFitted.code === 'bad_request', vanFitted);
+
+    $('doneHome').click();
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    check('switch back to the site', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co'));
+
     // ---- Light / dark switch ----
     const themeBefore = document.documentElement.dataset.theme;
     $('themeBtn').click();
