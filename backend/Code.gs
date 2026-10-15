@@ -71,7 +71,8 @@ const ACTIONS = {
   submit: actionSubmit,
   admin: actionAdmin,
   van: actionVan,
-  sites: actionSites
+  sites: actionSites,
+  reviewPart: actionReviewPart
 };
 
 // ---------------------------------------------------------------- actions
@@ -317,8 +318,24 @@ function actionAdmin(req) {
     })),
     stock: stock,
     parts: parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]),
-    unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length
+    unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length,
+    newParts: parts.filter(p => !isTrue_(p.Reviewed)).map(p => ({
+      family: p.Family, name: p.Name, codes: String(p.ExactCodes || ''), addedBy: p.AddedBy, addedAt: iso_(p.AddedAt)
+    }))
   };
+}
+
+/** Admin approves a part added from a scan, optionally correcting its name. req: { session, family, name? } */
+function actionReviewPart(req) {
+  const user = sessionUser_(req.session, false);
+  if (String(user.Role).toLowerCase() !== 'admin') throw err_('forbidden', 'Admins only.');
+  const part = readTable_('Parts').find(p => p.Family === String(req.family || ''));
+  if (!part) throw err_('bad_request', 'That part is not in the parts list.');
+  const sh = sheet_('Parts');
+  const name = String(req.name || '').trim().slice(0, 120);
+  if (name) sh.getRange(part._row, SHEETS.Parts.indexOf('Name') + 1).setValue(name);
+  sh.getRange(part._row, SHEETS.Parts.indexOf('Reviewed') + 1).setValue(true);
+  return { family: part.Family, name: name || part.Name };
 }
 
 // ---------------------------------------------------------------- part codes

@@ -114,6 +114,7 @@
     const key = k => Array.from($('sheetBody').querySelectorAll('.keypad button')).find(b => b.textContent === k).click();
     ['1', '1', '1', '1', 'OK'].forEach(key);
     check('engineer tiles appear after sign in', await waitFor(() => !tile('USED').hidden && !tile('COUNT').hidden));
+    check('My van switch appears straight after sign in, no reload', !$('whereSwitch').hidden);
     check('recent activity has in/out icons', $('recentList').querySelectorAll('.ricon.in').length > 0);
     tile('USED').click();
     check('engineer signed in and scanner opened', await waitFor(() => visible('view-scan') && A.state.user && A.state.user.name === 'Test Engineer'));
@@ -331,6 +332,19 @@
     check('dashboard loads with summary figures', await waitFor(() => $('adminStats').children.length === 4 && $('adminStats').textContent.includes('sites')), $('adminSummary').textContent);
     check('admin PIN sheet closed after sign in', $('sheet').classList.contains('hidden'));
     check('summary counts both sites', $('adminStats').querySelector('.stat-value').textContent === '2');
+
+    // New parts to check: tap the figure, correct the name, approve
+    check('engineers cannot approve parts', call({ action: 'reviewPart', session: call({ action: 'login', site: site.Token, pin: '1111' }).session, family: 'P999K1234X' }).code === 'forbidden');
+    const newTile = $('adminStats').querySelector('button.stat');
+    check('new parts figure is a button', newTile && /^1new part to check/.test(newTile.textContent), $('adminStats').textContent);
+    newTile.click();
+    check('new parts list opens with the part', !$('admin-new').hidden && $('newPartList').querySelectorAll('.new-part').length === 1 && /P999K1234X/.test($('newPartList').textContent) && /Test Widget/.test($('newPartList').querySelector('input').value));
+    const npInput = $('newPartList').querySelector('input');
+    npInput.value = 'Test Widget Assembly';
+    $('newPartList').querySelector('.new-part .btn').click();
+    check('approving marks it reviewed with the corrected name', await waitFor(() => { const p = rows('Parts').find(x => x.Family === 'P999K1234X'); return p && isTrue_(p.Reviewed) && p.Name === 'Test Widget Assembly'; }));
+    check('figure drops to 0 and the list closes', await waitFor(() => $('admin-new').hidden && !$('admin-find').hidden && !$('adminStats').querySelector('button.stat') && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
+    check('admin data no longer counts it', call({ action: 'admin', session: A.state.session }).unreviewedParts === 0);
 
     // Find a part: by code and by name
     $('partQuery').value = '059K6158'; $('partQuery').dispatchEvent(new Event('input'));

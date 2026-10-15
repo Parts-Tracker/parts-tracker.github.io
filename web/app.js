@@ -314,7 +314,7 @@
         if (!r.ok) { err.textContent = r.error; err.hidden = false; pin = ''; update(); return; }
         state.session = r.session; state.user = r.user;
         store.set('pt_session', r.session); store.set('pt_user', r.user);
-        closeSheet(); renderUserChip(); renderHome();
+        closeSheet(); renderUserChip(); renderHome(); renderWhereSwitch(state.view);
         toast('Signed in as ' + r.user.name);
         state.queue.forEach(q => { if (q.error && /sign in/i.test(q.error)) q.error = ''; });
         saveQueue(); syncQueue();
@@ -1022,6 +1022,7 @@
       renderPartResults();
       renderSites();
       if (admin.tab === 'qr') renderQr();
+      if (admin.tab === 'new') renderNewParts();
     } catch (e) { $('adminSummary').textContent = e.code === 'offline' ? 'No connection. The dashboard needs signal.' : e.message; }
   }
 
@@ -1033,20 +1034,69 @@
     const items = d.sites.reduce((n, s) => n + s.items, 0);
     const holding = d.sites.filter(s => s.items > 0).length;
     const never = d.sites.filter(s => !s.lastCount).length;
-    const stat = (value, label, tone) => el('div', { class: 'stat' + (tone ? ' tone-' + tone : '') }, el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label));
+    const stat = (value, label, tone, onclick) => el(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' tone-' + tone : ''), onclick },
+      el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label + (onclick ? ' ›' : '')));
     const box = $('adminStats'); box.textContent = '';
+    const toCheck = d.unreviewedParts || 0;
     box.append(
       stat(d.sites.length, 'sites', 'green'),
       stat(items, 'items at ' + holding + (holding === 1 ? ' site' : ' sites'), 'lime'),
       stat(never, 'never counted', never ? 'pink' : 'blue'),
-      stat(d.unreviewedParts, 'new parts to check', d.unreviewedParts ? 'purple' : 'blue'));
+      stat(toCheck, toCheck === 1 ? 'new part to check' : 'new parts to check', toCheck ? 'purple' : 'blue', toCheck ? showNewParts : null));
   }
 
   function showAdminTab(tab) {
     admin.tab = tab;
     document.querySelectorAll('[data-admin-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.adminTab === tab)));
-    ['find', 'sites', 'site', 'qr'].forEach(t => { $('admin-' + t).hidden = t !== tab; });
+    ['find', 'sites', 'site', 'new', 'qr'].forEach(t => { $('admin-' + t).hidden = t !== tab; });
     if (tab === 'qr') renderQr();
+  }
+
+  // --- New parts added from scans: an admin checks the code and name, then approves ---
+  let tabBeforeNew = 'find';
+  function showNewParts() {
+    if (admin.tab !== 'new') tabBeforeNew = admin.tab === 'site' ? 'sites' : admin.tab;
+    showAdminTab('new');
+    renderNewParts();
+    window.scrollTo(0, 0);
+  }
+  function renderNewParts() {
+    const out = $('newPartList'); out.textContent = '';
+    const list = admin.data.newParts;
+    if (!list) { out.append(el('p', { class: 'muted' }, 'The Apps Script backend needs updating to list new parts (paste the new Code.gs and deploy a new version).')); return; }
+    if (!list.length) { out.append(el('p', { class: 'muted' }, 'All new parts have been checked.')); return; }
+    list.forEach(p => {
+      const name = el('input', { class: 'input', value: p.name === 'Unnamed part' ? '' : p.name, placeholder: 'Part name', 'aria-label': 'Name for ' + p.family });
+      const err = el('div', { class: 'error', hidden: true });
+      const held = holdersOf(p.family).filter(h => h.qty > 0).map(h => admin.data.sites[h.site].name + ' (' + h.qty + ')');
+      const codes = p.codes.split(/[\s,]+/).filter(c => c && c !== p.family);
+      const approve = el('button', { class: 'btn primary', onclick: async () => {
+        if (!name.value.trim()) { err.textContent = 'Type the part name from the box first.'; err.hidden = false; name.focus(); return; }
+        err.hidden = true; approve.disabled = true; approve.textContent = 'Saving…';
+        try {
+          const r = await api({ action: 'reviewPart', session: state.session, family: p.family, name: name.value.trim() });
+          if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code });
+          admin.data.newParts = list.filter(x => x !== p);
+          admin.data.unreviewedParts = admin.data.newParts.length;
+          const known = admin.parts.get(p.family);
+          if (known) known.name = r.name;
+          toast('Approved ' + p.family);
+          renderAdminStats();
+          if (admin.data.newParts.length) renderNewParts(); else showAdminTab(tabBeforeNew);
+          renderPartResults();
+        } catch (e) {
+          approve.disabled = false; approve.textContent = 'Approve';
+          err.textContent = e.code === 'offline' ? 'No connection. Approving needs signal.' : e.message; err.hidden = false;
+        }
+      } }, 'Approve');
+      out.append(el('div', { class: 'card new-part' },
+        el('div', { class: 'item-name mono' }, p.family),
+        el('div', { class: 'item-sub' }, [codes.length ? 'Box code ' + codes.join(', ') : '', p.addedBy ? 'added by ' + p.addedBy : '', p.addedAt ? when(p.addedAt) : ''].filter(Boolean).join(' · ')),
+        el('div', { class: 'item-sub' }, held.length ? 'At ' + held.join(', ') : 'Not at any site'),
+        el('label', { class: 'field' }, 'Name', name),
+        err,
+        approve));
+    });
   }
 
   // --- Find a part: which sites hold it ---
@@ -1244,6 +1294,7 @@
     $('siteQuery').addEventListener('input', renderSites);
     $('siteSort').addEventListener('change', renderSites);
     $('siteBack').addEventListener('click', () => showAdminTab('sites'));
+    $('newBack').addEventListener('click', () => showAdminTab(tabBeforeNew));
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && state.scanner) state.scanner.stop();
       else if (!document.hidden && state.view === 'view-scan') startCamera();
