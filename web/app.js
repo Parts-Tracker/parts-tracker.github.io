@@ -891,6 +891,22 @@
   function siteUrl(token) {
     return location.origin + location.pathname.replace(/index\.html$/, '') + '?s=' + encodeURIComponent(token);
   }
+  /**
+   * Prints just one QR card, whatever is ticked. The other cards stay hidden until the print screen
+   * closes ('afterprint'): iPhones open the print screen after print() returns, so no timer is used.
+   */
+  function printOne(card) {
+    clearSolo();
+    document.body.classList.add('print-solo');
+    card.classList.add('solo');
+    window.addEventListener('afterprint', clearSolo, { once: true });
+    window.print();
+  }
+  function clearSolo() {
+    document.body.classList.remove('print-solo');
+    document.querySelectorAll('.qr-card.solo').forEach(c => c.classList.remove('solo'));
+  }
+
   function renderQr() {
     if (admin.qrBuilt || !admin.data) return;
     const grid = $('qrGrid'); grid.textContent = '';
@@ -902,7 +918,9 @@
       const card = el('div', { class: 'qr-card' });
       const tick = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Print ' + s.name });
       tick.addEventListener('change', () => card.classList.toggle('skip', !tick.checked));
-      card.append(el('label', { class: 'qr-tick no-print' }, tick, 'Print'));
+      card.append(el('div', { class: 'qr-actions no-print' },
+        el('label', { class: 'qr-tick' }, tick, 'Include in Print selected'),
+        el('button', { class: 'small', onclick: () => printOne(card) }, 'Print this one')));
       if (window.qrcode) {
         const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
         const holder = el('div', {}); holder.innerHTML = qr.createSvgTag(4, 2);

@@ -260,6 +260,13 @@
     const tick = $('qrGrid').querySelector('.qr-card input');
     tick.click();
     check('unticked site is left out of the print', tick.closest('.qr-card').classList.contains('skip'));
+    let printedSolo = null;
+    window.print = () => { printedSolo = { solo: document.body.classList.contains('print-solo'), cards: [...document.querySelectorAll('.qr-card.solo')].map(c => c.querySelector('.qr-site').textContent) }; };
+    const lastCard = [...$('qrGrid').querySelectorAll('.qr-card')].pop();
+    [...lastCard.querySelectorAll('button')].find(b => b.textContent === 'Print this one').click();
+    check('Print this one prints only that card', printedSolo && printedSolo.solo && printedSolo.cards.length === 1 && printedSolo.cards[0] === lastCard.querySelector('.qr-site').textContent, printedSolo);
+    window.dispatchEvent(new Event('afterprint'));
+    check('page returns to normal after printing one', !document.body.classList.contains('print-solo') && !document.querySelector('.qr-card.solo'));
 
     // ---- New-part sheet has no stray text ----
     $('doneHome').click();

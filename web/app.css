@@ -235,3 +235,18 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 }
 .part-total.below { color: var(--bad); white-space: normal; text-align: right; max-width: 45%; }
 .hero-meta { margin-top: 10px; }
+
+/* QR cards: "Print this one" prints a single card; "Print selected" prints the ticked ones */
+.qr-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 6px; }
+.qr-actions .qr-tick { margin-bottom: 0; }
+@media print {
+  .qr-actions { display: none !important; }
+  .print-solo .qr-card:not(.solo) { display: none !important; }
+  .print-solo .qr-card.solo { display: block !important; opacity: 1; }
+}
+@media print {
+  html, body { background: #fff !important; }
+  .qr-grid { gap: 8px; }
+  .qr-card { min-width: 0; padding: 8px; }
+  .qr-card svg { width: 100%; max-width: 180px; height: auto; }
+}
