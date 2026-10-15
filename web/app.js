@@ -193,6 +193,7 @@
     const pl = $('printerList'); pl.textContent = '';
     (d.printers || []).forEach(m => pl.append(el('span', {}, m)));
     // Customers only see what they can do; engineers see everything once signed in
+    $('changeSite').hidden = !isEngineer();
     document.querySelectorAll('.action[data-engineer]').forEach(b => { b.hidden = !isEngineer(); });
     const parts = (d.stock || []).filter(s => s.qty > 0);
     const total = parts.reduce((n, s) => n + s.qty, 0);
@@ -918,6 +919,60 @@
     else show('view-nosite');
   }
 
+  // ---------- Change site (engineers) ----------
+  // Lets a signed-in engineer move to another site in the same tab, instead of scanning its QR code
+  // (each scan opens a new browser tab). The list is kept on the phone for poor signal.
+  async function chooseSite() {
+    if (!isEngineer()) { askPin(chooseSite, 'Engineer sign in'); return; }
+    let sites = store.get('pt_sites', []);
+    const input = el('input', { class: 'input', placeholder: 'Site name, town or postcode', autocomplete: 'off' });
+    const status = el('p', { class: 'muted' }, sites.length ? '' : 'Loading sites…');
+    const results = el('div', {});
+    const recentIds = () => store.get('pt_recent_sites', []);
+    const render = () => {
+      results.textContent = '';
+      const q = input.value.trim().toLowerCase().replace(/\s+/g, ' ');
+      let list;
+      if (q) {
+        list = sites.filter(s => [s.name, s.town, s.postcode, String(s.postcode || '').replace(/\s/g, '')].join(' ').toLowerCase().includes(q));
+      } else {
+        const recent = recentIds().map(id => sites.find(s => s.id === id)).filter(Boolean);
+        list = recent.concat(sites.filter(s => !recent.includes(s)));
+        if (recent.length) results.append(el('p', { class: 'section-title' }, 'Recent sites first'));
+      }
+      list.slice(0, 40).forEach(s => results.append(el('button', { class: 'pick', onclick: () => { closeSheet(); switchSite(s); } },
+        el('span', {}, el('span', { class: 'item-name' }, s.name), el('span', { class: 'item-sub' }, [s.town, s.postcode].filter(Boolean).join(' · '))),
+        s.token === state.site ? el('span', { class: 'tag current' }, 'current') : null)));
+      if (q && !list.length) results.append(el('p', { class: 'muted' }, 'No sites match.'));
+      if (list.length > 40) results.append(el('p', { class: 'muted' }, 'Showing 40 of ' + list.length + '. Type to narrow the list.'));
+    };
+    input.addEventListener('input', render);
+    openSheet('Change site', [input, status, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    render();
+    try {
+      const r = await api({ action: 'sites', session: state.session });
+      if (!r.ok) { status.textContent = r.error; return; }
+      sites = r.sites.sort((a, b) => a.name.localeCompare(b.name));
+      store.set('pt_sites', sites);
+      status.textContent = '';
+      render();
+    } catch (e) {
+      status.textContent = sites.length ? 'No connection: showing the saved list.' : 'No connection. The site list needs signal the first time.';
+    }
+  }
+
+  function switchSite(s) {
+    state.site = s.token;
+    store.set('pt_site', s.token);
+    store.set('pt_recent_sites', [s.id].concat(store.get('pt_recent_sites', []).filter(id => id !== s.id)).slice(0, 5));
+    history.replaceState(null, '', location.pathname);   // a reload keeps the chosen site, not the last QR code
+    state.where = 'site';
+    state.data = store.get('pt_boot_' + s.token, null);
+    if (state.data) { renderHome(); show('view-home'); }
+    toast('Now at ' + s.name);
+    loadSite().then(() => { if (state.data && state.view !== 'view-home' && state.site === s.token) { renderHome(); show('view-home'); } });
+  }
+
   // ---------- Stock view ----------
   function renderStock() {
     const q = $('stockFilter').value.trim().toLowerCase();
@@ -1159,6 +1214,8 @@
       if (b.dataset.where === 'van') openVan(); else { state.where = 'site'; goHome(); }
     }));
     $('nositeVan').addEventListener('click', openVan);
+    $('nositeChoose').addEventListener('click', chooseSite);
+    $('changeSite').addEventListener('click', chooseSite);
     $('vanStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
     $('orderParts').addEventListener('click', orderParts);
     $('copyOrder').addEventListener('click', copyOrder);
@@ -1220,7 +1277,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite };
 
   init();
 })();

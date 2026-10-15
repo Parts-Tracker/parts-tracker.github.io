@@ -70,7 +70,8 @@ const ACTIONS = {
   login: actionLogin,
   submit: actionSubmit,
   admin: actionAdmin,
-  van: actionVan
+  van: actionVan,
+  sites: actionSites
 };
 
 // ---------------------------------------------------------------- actions
@@ -224,6 +225,19 @@ function actionSubmit(req) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Every active site, for a signed-in engineer to switch site without scanning the QR code again.
+ * Each site's token is the same value printed in its QR code.
+ */
+function actionSites(req) {
+  const user = sessionUser_(req.session, false);
+  if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
+  return {
+    sites: readTable_('Sites').filter(s => isTrue_(s.Active) && s.Name && s.Token)
+      .map(s => ({ id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token }))
+  };
 }
 
 // ---------------------------------------------------------------- vans

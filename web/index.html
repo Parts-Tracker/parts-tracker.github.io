@@ -37,6 +37,7 @@
       <div class="card center">
         <h1>Scan the site QR code</h1>
         <p class="muted">Open this app by scanning the QR code on the parts cupboard at the site. It links the app to that site.</p>
+        <button class="btn" id="nositeChoose">Engineers: choose a site</button>
         <button class="btn" id="nositeVan">Engineers: open My van</button>
       </div>
     </section>
@@ -91,6 +92,7 @@
         <h1 class="site-name" id="siteName"></h1>
         <div class="hero-address"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg><span id="siteAddress"></span></div>
         <div class="chips" id="printerList"></div>
+        <button class="small hero-change" id="changeSite" hidden>Change site</button>
       </div>
 
       <button class="action action-main tone-green" data-mode="BOOK_IN">

@@ -107,6 +107,7 @@
 
     // ---- Engineer: used on a job needs sign-in and a job number ----
     const tile = m => document.querySelector('[data-mode=' + m + ']');
+    check('customers do not see Change site', $('changeSite').hidden);
     check('customers see only their tiles', tile('USED').hidden && tile('COUNT').hidden && !tile('CUSTOMER_FITTED').hidden && !tile('BOOK_IN').hidden);
     $('userChip').click();
     check('engineer sign in asks for a PIN', await waitFor(() => $('sheetTitle').textContent.includes('sign in')));
@@ -246,6 +247,24 @@
     $('doneHome').click();
     document.querySelector('#whereSwitch [data-where=site]').click();
     check('switch back to the site', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co'));
+
+    // ---- Change site: engineers move between sites in the same tab, no QR scan ----
+    check('engineer sees Change site', !$('changeSite').hidden);
+    $('changeSite').click();
+    check('site list shows every site', await waitFor(() => $('sheetTitle').textContent === 'Change site' && $('sheetBody').querySelectorAll('.pick').length === 2));
+    const siteSearch = $('sheetBody').querySelector('input');
+    siteSearch.value = 'bradford'; siteSearch.dispatchEvent(new Event('input'));
+    check('site list searches by town', $('sheetBody').querySelectorAll('.pick').length === 1);
+    $('sheetBody').querySelector('.pick').click();
+    check('switched to the chosen site in the same tab', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Demo Graphics Ltd'), $('siteName').textContent);
+    check('chosen site remembered for next time', JSON.parse(localStorage.getItem('pt_site')) === rows('Sites')[1].Token && !location.search.includes('s='));
+    $('changeSite').click();
+    await waitFor(() => $('sheetBody').querySelectorAll('.pick').length === 2);
+    check('recent sites listed first', /Recent sites first/.test($('sheetBody').textContent) && $('sheetBody').querySelector('.pick').textContent.includes('Demo Graphics'));
+    [...$('sheetBody').querySelectorAll('.pick')].find(b => /Sample Print/.test(b.textContent)).click();
+    check('switch back to the first site', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co'));
+    const sitesNoSignIn = call({ action: 'sites' });
+    check('site list needs a signed-in engineer', !sitesNoSignIn.ok && sitesNoSignIn.code === 'session', sitesNoSignIn);
 
     // ---- Light / dark switch ----
     const themeBefore = document.documentElement.dataset.theme;
