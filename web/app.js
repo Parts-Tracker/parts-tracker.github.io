@@ -740,6 +740,8 @@
     try {
       const r = await api({ action: 'admin', session: state.session });
       if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session' || r.code === 'forbidden') askPin(loadAdmin, 'Admin sign in'); return; }
+      // Older backends send fewer details per site; fill the gaps so the dashboard still works
+      r.sites = (r.sites || []).map(s => Object.assign({ town: '', postcode: '', printers: [], lastActivity: '', items: 0 }, s));
       admin.data = r;
       admin.parts = new Map((r.parts || []).map(([family, name, codes]) => [family, { family, name, codes: String(codes || '') }]));
       admin.byFamily = new Map();
@@ -750,7 +752,7 @@
         admin.bySite[si].push({ family, qty });
       });
       admin.qrBuilt = false;
-      $('adminSummary').textContent = '';
+      $('adminSummary').textContent = r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
       renderAdminStats();
       renderPartResults();
       renderSites();
