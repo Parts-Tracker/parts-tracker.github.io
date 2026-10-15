@@ -78,7 +78,10 @@ function setupSheets_() {
       sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
       sh.setFrozenRows(1);
     } else {
-      // Tabs made by an older version: add any new columns at the end, leaving existing data alone
+      // Tabs made by an older version: rename "Family" to "Part Number", then add any new columns
+      // at the end, leaving existing data alone
+      const first = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+      first.forEach((h, j) => { if (h === 'Family') sh.getRange(1, j + 1).setValue('Part Number'); });
       const have = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
       head.filter(h => have.indexOf(h) < 0).forEach(h => {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold');

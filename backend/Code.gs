@@ -13,14 +13,19 @@
 // between /d/ and /edit, e.g. https://docs.google.com/spreadsheets/d/THIS_PART/edit
 const SHEET_ID = '';
 
+// Column headings as people see them in the Sheet -> the name the code uses.
+// "Part Number" holds the family code (e.g. P053K0667X); sheets made before the rename still say "Family".
+const HEADER_KEYS = { 'Part Number': 'Family' };
+const key_ = h => HEADER_KEYS[h] || h;
+
 const SHEETS = {
   Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Contact', 'Phone', 'Token', 'Active', 'LastCount'],
   Printers: ['SiteID', 'Model', 'Serial'],
-  Parts: ['Family', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
+  Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
-  Movements: ['MovementID', 'Timestamp', 'SiteID', 'Family', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
-  Kits: ['Model', 'Family', 'Qty'],
-  VanKit: ['Family', 'Min', 'Max']   // one van kit for every engineer
+  Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
+  Kits: ['Model', 'Part Number', 'Qty'],
+  VanKit: ['Part Number', 'Min', 'Max']   // one van kit for every engineer
 };
 
 // Which movement types each role may record, and the sign of their quantity
@@ -328,7 +333,7 @@ function movementColumns_() {
   const last = sh.getLastRow();
   if (last < 2) return [];
   const head = SHEETS.Movements;
-  const iSite = head.indexOf('SiteID'), iFam = head.indexOf('Family'), iQty = head.indexOf('Qty');
+  const iSite = head.indexOf('SiteID'), iFam = head.indexOf('Part Number'), iQty = head.indexOf('Qty');
   return sh.getRange(2, 1, last - 1, head.length).getValues().map(r => ({ site: String(r[iSite]), family: String(r[iFam]), qty: Number(r[iQty]) || 0, row: r }));
 }
 
@@ -511,7 +516,7 @@ function readTable_(name) {
   for (let i = 1; i < values.length; i++) {
     if (values[i].every(v => v === '' || v === null)) continue;
     const o = { _row: i + 1 };
-    head.forEach((h, j) => { o[h] = values[i][j]; });
+    head.forEach((h, j) => { o[key_(h)] = values[i][j]; });
     out.push(o);
   }
   return out;
@@ -521,7 +526,7 @@ function appendObjects_(name, objects) {
   if (!objects.length) return;
   const sh = sheet_(name);
   const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
-  const values = objects.map(o => head.map(h => (o[h] === undefined ? '' : o[h])));
+  const values = objects.map(o => head.map(h => (o[key_(h)] === undefined ? '' : o[key_(h)])));
   const start = sh.getLastRow() + 1;
   sh.getRange(start, 1, values.length, head.length).setValues(values);
   objects.forEach((o, i) => { o._row = start + i; });

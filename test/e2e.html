@@ -37,6 +37,12 @@
     const site = rows('Sites')[0];
     check('sample data has 2 sites with tokens', rows('Sites').length === 2 && rows('Sites').every(s => String(s.Token).length === 32));
     check('PINs stored hashed, plain PIN cleared', rows('Users').every(u => u.PinHash && !u.PIN));
+    check('part code column is called Part Number', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').getRange(1, 1).getValue() === 'Part Number');
+    const partsTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts');
+    partsTab.getRange(1, 1).setValue('Family');   // a Sheet made before the rename
+    check('old "Family" heading is still read', rows('Parts').length === 9 && rows('Parts').every(p => /^P/.test(p.Family)));
+    runSetup();
+    check('setup renames "Family" to "Part Number"', partsTab.getRange(1, 1).getValue() === 'Part Number' && rows('Parts').length === 9 && !partsTab.getRange(1, 8).getValue());
 
     // ---- Code rule parity between backend and app ----
     await loadScript('../web/codes.js');
