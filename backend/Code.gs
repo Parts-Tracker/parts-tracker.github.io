@@ -591,13 +591,17 @@ function json_(obj) {
 
 /** Settings tab rows: [Setting, default Value, Notes]. Setup adds any that are missing. */
 const SETTINGS_DEFAULTS = [
-  ['ReportEmail', '', 'Where the daily Up Time Kit email goes. Blank: the Email of the OrderEngineer user.'],
+  ['ReportEmail', '', 'Where the daily Up Time Kit email goes. Blank: the Email of the first active admin on the Users tab.'],
   ['ReportHour', 18, 'Hour (0-23, UK time) the daily email is sent. After changing it, run installDailyReport again.'],
-  ['OrderEngineer', '', 'UserID whose name, email, postcode and ByBox fill the order form. Blank: the first active admin.'],
   ['OrderFormUrl', 'https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69', 'Smartsheet parts order form opened by the email buttons.'],
-  ['PartsReason', 'CAR STOCK', 'Parts Reason on the order form. Must match one of the form\'s choices exactly.'],
-  ['SDCallNo', 'Up Time Kit', 'SD CALL No. on the order form.']
+  ['PartsReason', 'Uptime Kit', 'Parts Reason on the order form. Must match one of the form\'s choices exactly.'],
+  ['Urgency', 'Low - Will Wait - But Not Long', 'Urgency on the order form. Must match one of the form\'s choices exactly.'],
+  ['SDCallNo', 'Uptime Kit', 'SD CALL No. on the order form.'],
+  ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
+  ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.']
 ];
+// Values from the first version of this report, replaced by setup if still unchanged
+const SETTINGS_OLD_DEFAULTS = { PartsReason: 'CAR STOCK', SDCallNo: 'Up Time Kit' };
 
 // Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site
 const KIT_USE_TYPES = ['CUSTOMER_FITTED', 'USED'];
@@ -618,13 +622,10 @@ function settings_() {
   return out;
 }
 
-/** The engineer the order form is filled in for, and where the email goes. */
-function reportPeople_(cfg) {
-  const users = readTable_('Users').filter(u => isTrue_(u.Active));
-  const id = String(cfg.OrderEngineer || '').trim();
-  const engineer = (id && users.find(u => String(u.UserID) === id)) ||
-    users.find(u => String(u.Role).toLowerCase() === 'admin' && u.Email) || {};
-  return { engineer: engineer, to: String(cfg.ReportEmail || engineer.Email || '').trim() };
+/** Where the daily email goes. */
+function reportEmail_(cfg) {
+  const admin = readTable_('Users').find(u => isTrue_(u.Active) && String(u.Role).toLowerCase() === 'admin' && u.Email) || {};
+  return String(cfg.ReportEmail || admin.Email || '').trim();
 }
 
 /**
@@ -661,31 +662,34 @@ function kitUsage_(from, to) {
   }).sort((a, b) => String(a.site.Name).localeCompare(String(b.site.Name)));
 }
 
-/** Smartsheet order form link for one site's used kit parts (at most 9 lines, the form's limit). */
-function kitOrderUrl_(cfg, engineer, site, parts) {
+/**
+ * Order button link for one site's used kit parts (at most 9 lines, the form's limit). Parts go straight to
+ * the customer. The link opens the app's order.html, which adds Date Required Onsite (the day the button is
+ * pressed + DaysNeeded) and then opens the Smartsheet form with everything else filled in.
+ */
+function kitOrderUrl_(cfg, site, parts) {
   const p = [];
   const add = (k, v) => { if (v !== '' && v != null) p.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v))); };
+  add('f', (String(cfg.OrderFormUrl).match(/[0-9a-f]{32}/) || [''])[0]);
+  add('days', cfg.DaysNeeded);
   add('Parts Reason', cfg.PartsReason);
-  add('Urgency', 'Med - As soon as possible');
+  add('Urgency', cfg.Urgency);
   add('Pre 10:30', 'No');
-  add('ByBox/Collection', 'Yes');
+  add('ByBox/Collection', 'No');
   add('SD CALL No.', cfg.SDCallNo);
-  add('Notes', 'Up Time Kit Replenishment - ' + site.Name);
-  add('Date Required Onsite', Utilities.formatDate(new Date(Date.now() + 86400000), Session.getScriptTimeZone(), 'dd/MM/yyyy'));
+  add('Notes', 'Uptime Kit Replenishment - ' + site.Name);
   add('Customer Name', site.Name);
   add('Post Code', site.Postcode);
-  add('Engineer Name Attending', engineer.Name);
-  add('Part Requested By', engineer.Name);
-  if (engineer.Email) { add('Engineer Email', engineer.Email); add('Email', engineer.Email); add('Send me a copy of my responses', 'true'); }
-  if (engineer.ByBox) add('ByBox Location / Collection Point', String(engineer.ByBox).replace(/My ByBox location is\s*/i, '').trim());
+  add('Engineer Name Attending', site.Name);
+  add('Part Requested By', site.Name);
   parts.slice(0, FORM_PART_FIELDS.length).forEach((l, i) => {
     add(FORM_PART_FIELDS[i][0], l.family);
     add(FORM_PART_FIELDS[i][1], l.qty);
     add(FORM_PART_FIELDS[i][2], l.name);
   });
   if (parts.length > 4) add('Order Additional Parts', 'true');
-  const base = String(cfg.OrderFormUrl);
-  return base + (base.indexOf('?') >= 0 ? '&' : '?') + p.join('&');
+  const app = String(cfg.AppUrl || 'https://parts-tracker.github.io/');
+  return app.replace(/\/?$/, '/') + 'order.html?' + p.join('&');
 }
 
 function esc_(v) {
@@ -693,7 +697,7 @@ function esc_(v) {
 }
 
 /** The email: one block per site with its used kit parts and an order button (more than 9 parts: one button per 9). */
-function kitReportHtml_(usage, cfg, engineer, title) {
+function kitReportHtml_(usage, cfg, title) {
   let html = '<div style="font-family:Arial,sans-serif;color:#333;max-width:680px">' +
     '<h2 style="color:#01916D;margin:0 0 4px">Up Time Kit replenishment</h2>' +
     '<p style="margin:0 0 16px;color:#666">' + esc_(title) + '</p>';
@@ -715,7 +719,7 @@ function kitReportHtml_(usage, cfg, engineer, title) {
     for (let i = 0; i < u.parts.length; i += FORM_PART_FIELDS.length) {
       const chunk = u.parts.slice(i, i + FORM_PART_FIELDS.length);
       const label = u.parts.length > FORM_PART_FIELDS.length ? 'Order parts ' + (i + 1) + '-' + (i + chunk.length) + ' &rarr;' : 'Order replacements &rarr;';
-      html += '<a href="' + esc_(kitOrderUrl_(cfg, engineer, s, chunk)) + '" style="display:inline-block;margin:0 8px 6px 0;background:#01916D;color:#fff;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:bold">' + label + '</a>';
+      html += '<a href="' + esc_(kitOrderUrl_(cfg, s, chunk)) + '" style="display:inline-block;margin:0 8px 6px 0;background:#01916D;color:#fff;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:bold">' + label + '</a>';
     }
     html += '</div></div>';
   });
@@ -740,15 +744,15 @@ function sendDailyKitReport() {
 /** Builds and sends one report. Returns how many sites were in it (0: nothing sent unless always is true). */
 function sendKitReport_(from, to, title, always, subjectPrefix) {
   const cfg = settings_();
-  const people = reportPeople_(cfg);
-  if (!people.to) throw new Error('No email address for the kit report. Fill in ReportEmail on the Settings tab.');
+  const email = reportEmail_(cfg);
+  if (!email) throw new Error('No email address for the kit report. Fill in ReportEmail on the Settings tab.');
   const usage = kitUsage_(from, to);
   if (!usage.length && !always) return 0;
   const tz = Session.getScriptTimeZone();
   const subject = (subjectPrefix || '') + 'Up Time Kit replenishment - ' + Utilities.formatDate(to, tz, 'EEE d MMM yyyy') +
     (usage.length ? ' (' + usage.length + (usage.length === 1 ? ' site)' : ' sites)') : '');
-  const html = usage.length ? kitReportHtml_(usage, cfg, people.engineer, title)
+  const html = usage.length ? kitReportHtml_(usage, cfg, title)
     : '<p style="font-family:Arial,sans-serif">No Up Time Kit parts were used. (' + esc_(title) + ')</p>';
-  MailApp.sendEmail({ to: people.to, subject: subject, htmlBody: html, name: 'Parts Tracker' });
+  MailApp.sendEmail({ to: email, subject: subject, htmlBody: html, name: 'Parts Tracker' });
   return usage.length;
 }

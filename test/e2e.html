@@ -350,8 +350,13 @@
     const kitRows = rows('Kits');
     check('setup adds the small kit for SC180, SC170 and EC1100', ['SC180', 'SC170', 'EC1100'].every(m => kitRows.filter(k => k.Model === m).map(k => k.Family).sort().join() === 'P053K0668X,P859K4874X'));
     check('setup adds the small-kit parts and default settings', rows('Parts').some(p => p.Family === 'P859K4874X' && p.Name === '2nd BTR Assembly') && rows('Settings').some(r => r.Setting === 'OrderFormUrl' && /397ec25e/.test(r.Value)));
+    const setRow = k => rows('Settings').find(r => r.Setting === k);
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('PartsReason')._row, 2).setValue('CAR STOCK');   // first version's value
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(17);              // a value the user chose
     runSetup();
     check('setup run again adds nothing twice', rows('Kits').length === kitRows.length && rows('Settings').length === SETTINGS_DEFAULTS.length);
+    check('setup updates the old Parts Reason but keeps chosen values', setRow('PartsReason').Value === 'Uptime Kit' && setRow('ReportHour').Value === 17);
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(18);
     appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P059K6158X', Qty: 2 }]);
     const a01 = rows('Users').find(u => u.UserID === 'A01');
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, SHEETS.Users.indexOf('Email') + 1).setValue('admin@example.com');
@@ -377,9 +382,29 @@
     const demoLink = links.find(l => l.includes('Demo%20Graphics')) || '';
     const q = new URLSearchParams(demoLink.split('?')[1] || '');
     check('email lists each site with its parts', /Demo Graphics Ltd/.test(body) && /Sample Print Co/.test(body) && /Suction Filter/.test(body) && !/P004E1900X/.test(body) && links.length === 2);
-    check('order button fills the van form for the customer', demoLink.startsWith('https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69?') &&
-      q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' && q.get('1 Part No.') === 'P053K0668X' && q.get('1 Qty') === '1' && q.get('1 Description') === 'Suction Filter' &&
-      q.get('SD CALL No.') === 'Up Time Kit' && q.get('Parts Reason') === 'CAR STOCK' && q.get('Engineer Email') === 'admin@example.com' && q.get('ByBox Location / Collection Point') === 'Leeds Station' && /^\d\d\/\d\d\/\d{4}$/.test(q.get('Date Required Onsite')), demoLink);
+    check('order button goes through the app to the van form', demoLink.startsWith('https://parts-tracker.github.io/order.html?') && q.get('f') === '397ec25e0b1c44e3a4b4dcc952edba69' && q.get('days') === '7', demoLink);
+    check('order button fills the form for delivery to the customer',
+      q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Engineer Name Attending') === 'Demo Graphics Ltd' && q.get('Part Requested By') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' &&
+      q.get('1 Part No.') === 'P053K0668X' && q.get('1 Qty') === '1' && q.get('1 Description') === 'Suction Filter' &&
+      q.get('Parts Reason') === 'Uptime Kit' && q.get('Urgency') === 'Low - Will Wait - But Not Long' && q.get('Pre 10:30') === 'No' && q.get('ByBox/Collection') === 'No' &&
+      q.get('SD CALL No.') === 'Uptime Kit' && q.get('Notes') === 'Uptime Kit Replenishment - Demo Graphics Ltd', demoLink);
+    check('no email, ByBox or date in the email link', !q.has('Engineer Email') && !q.has('Email') && !q.has('ByBox Location / Collection Point') && !q.has('Date Required Onsite'));
+    // order.html adds the date when the button is pressed, then opens the form (location.replace captured instead)
+    const orderSrc = await (await fetch('../web/order.html')).text();
+    const runOrder = search => new Promise(res => {
+      const fr = document.createElement('iframe'); fr.style.display = 'none';
+      fr.srcdoc = orderSrc.replace('location.search', JSON.stringify(search)).replace('location.replace(url);', 'parent.__orderUrl = url;');
+      window.__orderUrl = null;
+      fr.onload = () => { const msg = fr.contentDocument.getElementById('msg').textContent; fr.remove(); res({ url: window.__orderUrl, msg }); };
+      document.body.appendChild(fr);
+    });
+    const orderOpened = await runOrder('?' + demoLink.split('?')[1]);
+    const oq = new URLSearchParams((orderOpened.url || '').split('?')[1] || '');
+    const week = new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-GB');
+    check('order page opens the Smartsheet form with the date a week from today', (orderOpened.url || '').startsWith('https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69?') &&
+      oq.get('Date Required Onsite') === week && oq.get('Customer Name') === 'Demo Graphics Ltd' && oq.get('1 Part No.') === 'P053K0668X' && !oq.has('f') && !oq.has('days'), orderOpened.url);
+    const bad = await runOrder('?f=https%3A%2F%2Fevil.example&Customer%20Name=x');
+    check('order page only opens Smartsheet forms', !bad.url && /not complete/.test(bad.msg));
     mail.length = 0;
     check('nothing used since: no email', sendDailyKitReport() === 0 && mail.length === 0);
     testDailyKitReport();

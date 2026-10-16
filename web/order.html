@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Opening order form</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #f4f6f5; color: #333; }
+  main { max-width: 480px; margin: 18vh auto 0; padding: 0 16px; text-align: center; }
+  a { display: inline-block; margin-top: 12px; background: #01916D; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 700; }
+  @media (prefers-color-scheme: dark) { body { background: #1b1f1e; color: #e6e6e6; } }
+</style>
+</head>
+<body>
+<main>
+  <p id="msg">Opening the Smartsheet order form…</p>
+  <a id="go" hidden>Open the order form</a>
+</main>
+<script>
+  /* Link target for the order buttons in the daily Up Time Kit email. Emails cannot change after they are sent,
+     so the "Date Required Onsite" is worked out here, when the button is pressed: today + days (default 7).
+     Only Smartsheet forms can be opened: f is the form id, every other parameter is passed on to the form. */
+  (function () {
+    const p = new URLSearchParams(location.search);
+    const form = p.get('f') || '';
+    const days = Math.min(60, Math.max(0, parseInt(p.get('days'), 10) || 7));
+    if (!/^[0-9a-f]{32}$/.test(form)) { document.getElementById('msg').textContent = 'This order link is not complete. Use the button in the email again.'; return; }
+    p.delete('f'); p.delete('days');
+    const due = new Date(Date.now() + days * 86400000);
+    p.set('Date Required Onsite', due.toLocaleDateString('en-GB'));
+    const url = 'https://app.smartsheet.com/b/form/' + form + '?' + p.toString();
+    const go = document.getElementById('go');
+    go.href = url; go.hidden = false;
+    location.replace(url);
+  })();
+</script>
+</body>
+</html>

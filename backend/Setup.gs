@@ -58,7 +58,7 @@ function installDailyReport() {
   const cfg = settings_();
   const hour = Math.min(23, Math.max(0, Math.floor(Number(cfg.ReportHour)) || 18));
   ScriptApp.newTrigger('sendDailyKitReport').timeBased().everyDays(1).atHour(hour).create();
-  const to = reportPeople_(cfg).to;
+  const to = reportEmail_(cfg);
   console.log('Daily Up Time Kit email is on: sent around ' + hour + ':00 each day to ' + (to || '(no address: fill in ReportEmail on the Settings tab)') + ', only on days a kit part is used.');
 }
 
@@ -67,7 +67,7 @@ function testDailyKitReport() {
   const to = new Date();
   const from = new Date(to.getTime() - 7 * 86400000);
   const n = sendKitReport_(from, to, 'TEST: kit parts used in the last 7 days', true, '[TEST] ');
-  console.log('Test email sent to ' + reportPeople_(settings_()).to + ' with ' + n + ' site(s).');
+  console.log('Test email sent to ' + reportEmail_(settings_()) + ' with ' + n + ' site(s).');
 }
 
 /** Turns the daily Up Time Kit email off. */
@@ -125,7 +125,15 @@ function setupSheets_() {
 
 /** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */
 function addMissingSettings_() {
-  const have = readTable_('Settings').map(r => String(r.Setting).trim());
+  const existing = readTable_('Settings');
+  const col = SHEETS.Settings.indexOf('Value') + 1;
+  existing.forEach(r => {
+    const k = String(r.Setting).trim();
+    if (SETTINGS_OLD_DEFAULTS[k] !== undefined && String(r.Value) === SETTINGS_OLD_DEFAULTS[k]) {
+      sheet_('Settings').getRange(r._row, col).setValue(SETTINGS_DEFAULTS.find(d => d[0] === k)[1]);
+    }
+  });
+  const have = existing.map(r => String(r.Setting).trim());
   const rows = SETTINGS_DEFAULTS.filter(d => have.indexOf(d[0]) < 0).map(d => ({ Setting: d[0], Value: d[1], Notes: d[2] }));
   appendObjects_('Settings', rows);
 }
