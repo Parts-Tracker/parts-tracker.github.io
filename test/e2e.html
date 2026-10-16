@@ -43,6 +43,16 @@
     check('old "Family" heading is still read', rows('Parts').length === 11 && rows('Parts').every(p => /^P/.test(p.Family)));
     runSetup();
     check('setup renames "Family" to "Part Number"', partsTab.getRange(1, 1).getValue() === 'Part Number' && rows('Parts').length === 11 && !partsTab.getRange(1, 8).getValue());
+    check('Sites tab has no Contact or Phone columns', !SHEETS.Sites.includes('Contact') && !SHEETS.Sites.includes('Phone') && !Object.keys(rows('Sites')[0]).some(k => k === 'Contact' || k === 'Phone'));
+    // Columns can be moved in the Sheet: reverse Sites, Users and Movements, and everything after this must still work
+    ['Sites', 'Users', 'Movements'].forEach(n => {
+      const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n);
+      const w = sh.getLastColumn();
+      sh.data = sh.data.map(r => { const line = r.slice(0, w); while (line.length < w) line.push(''); return line.reverse(); });
+    });
+    check('columns reversed for the rest of the test', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getRange(1, 1).getValue() === 'LastCount' && rows('Sites')[0].Name === 'Sample Print Co');
+    runSetup();
+    check('setup leaves moved columns where they are', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getRange(1, 1).getValue() === 'LastCount' && SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getLastColumn() === SHEETS.Sites.length);
 
     // ---- Code rule parity between backend and app ----
     await loadScript('../web/codes.js');
@@ -307,7 +317,7 @@
     const newUser = call({ action: 'login', site: site.Token, pin: '2222' });
     check('user added to the Sheet can sign in straight away', newUser.ok && newUser.user.name === 'New Engineer', newUser);
     const e02 = rows('Users').find(u => u.UserID === 'E02');
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(e02._row, SHEETS.Users.indexOf('Active') + 1).setValue(false);
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(e02._row, col_('Users', 'Active')).setValue(false);
     CacheService.getScriptCache().remove('users:v1');  // the cache would expire on its own within 5 minutes
     const blocked = call({ action: 'submit', site: site.Token, session: newUser.session, batchId: 'x9', type: 'USED', jobNo: '1', items: [{ code: 'P059K6158X', qty: 1 }] });
     check('deactivated user is blocked once the cache refreshes', !blocked.ok && blocked.code === 'session', blocked);
@@ -372,8 +382,8 @@
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(18);
     appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P059K6158X', Qty: 2 }]);
     const a01 = rows('Users').find(u => u.UserID === 'A01');
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, SHEETS.Users.indexOf('Email') + 1).setValue('admin@example.com');
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, SHEETS.Users.indexOf('ByBox') + 1).setValue('My ByBox location is Leeds Station');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, col_('Users', 'Email')).setValue('admin@example.com');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, col_('Users', 'ByBox')).setValue('My ByBox location is Leeds Station');
     const mail = window.__gas.sentMail;
     sendDailyKitReport(); mail.length = 0;   // start from now
     await sleep(5);

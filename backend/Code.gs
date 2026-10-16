@@ -19,7 +19,7 @@ const HEADER_KEYS = { 'Part Number': 'Family' };
 const key_ = h => HEADER_KEYS[h] || h;
 
 const SHEETS = {
-  Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Contact', 'Phone', 'Token', 'Active', 'LastCount'],
+  Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Token', 'Active', 'LastCount'],   // no customer contact details are kept
   Printers: ['SiteID', 'Model', 'Serial'],
   Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
@@ -288,13 +288,12 @@ function actionAdmin(req) {
   const user = sessionUser_(req.session, false);
   if (String(user.Role).toLowerCase() !== 'admin') throw err_('forbidden', 'Admins only.');
   ensureSiteTokens_();
-  const iTime = SHEETS.Movements.indexOf('Timestamp');
   const lines = {};
   const lastActivity = {};
   movementColumns_().forEach(m => {
     const k = m.site + '|' + m.family;
     lines[k] = (lines[k] || 0) + m.qty;
-    const t = m.row[iTime];
+    const t = m.row.Timestamp;
     if (t instanceof Date && (!lastActivity[m.site] || t > lastActivity[m.site])) lastActivity[m.site] = t;
   });
   const printers = {};
@@ -334,8 +333,8 @@ function actionReviewPart(req) {
   if (!part) throw err_('bad_request', 'That part is not in the parts list.');
   const sh = sheet_('Parts');
   const name = String(req.name || '').trim().slice(0, 120);
-  if (name) sh.getRange(part._row, SHEETS.Parts.indexOf('Name') + 1).setValue(name);
-  sh.getRange(part._row, SHEETS.Parts.indexOf('Reviewed') + 1).setValue(true);
+  if (name) sh.getRange(part._row, col_('Parts', 'Name')).setValue(name);
+  sh.getRange(part._row, col_('Parts', 'Reviewed')).setValue(true);
   return { family: part.Family, name: name || part.Name };
 }
 
@@ -364,9 +363,13 @@ function movementColumns_() {
   const sh = sheet_('Movements');
   const last = sh.getLastRow();
   if (last < 2) return [];
-  const head = SHEETS.Movements;
-  const iSite = head.indexOf('SiteID'), iFam = head.indexOf('Part Number'), iQty = head.indexOf('Qty');
-  return sh.getRange(2, 1, last - 1, head.length).getValues().map(r => ({ site: String(r[iSite]), family: String(r[iFam]), qty: Number(r[iQty]) || 0, row: r }));
+  // Columns found by heading, so they can be moved; row holds the whole line keyed by heading
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => key_(String(h)));
+  return sh.getRange(2, 1, last - 1, head.length).getValues().map(r => {
+    const row = {};
+    head.forEach((h, j) => { if (h) row[h] = r[j]; });
+    return { site: String(row.SiteID), family: String(row.Family), qty: Number(row.Qty) || 0, row: row };
+  });
 }
 
 function stockBySite_(siteId) {
@@ -385,11 +388,9 @@ function stockList_(siteId, names) {
 }
 
 function recentMovements_(siteId, names, limit) {
-  const head = SHEETS.Movements;
-  const idx = k => head.indexOf(k);
   return movementColumns_().filter(m => m.site === String(siteId)).slice(-limit).reverse().map(m => ({
-    at: iso_(m.row[idx('Timestamp')]), family: m.family, name: names[m.family] || '', qty: m.qty,
-    type: m.row[idx('Type')], by: m.row[idx('By')], jobNo: m.row[idx('JobNo')]
+    at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty,
+    type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo
   }));
 }
 
@@ -409,7 +410,7 @@ function addExactCode_(part, exact) {
   if (codes.indexOf(exact) >= 0 || part._row === undefined) return;
   codes.push(exact);
   part.ExactCodes = codes.join(', ');
-  sheet_('Parts').getRange(part._row, SHEETS.Parts.indexOf('ExactCodes') + 1).setValue(part.ExactCodes);
+  sheet_('Parts').getRange(part._row, col_('Parts', 'ExactCodes')).setValue(part.ExactCodes);
 }
 
 // ---------------------------------------------------------------- batches (offline retries)
@@ -419,7 +420,7 @@ function batchSeen_(batchId) {
   const sh = sheet_('Movements');
   const last = sh.getLastRow();
   if (last < 2) return false;
-  const col = SHEETS.Movements.indexOf('BatchID') + 1;
+  const col = col_('Movements', 'BatchID');
   const start = Math.max(2, last - 4999);
   return sh.getRange(start, col, last - start + 1, 1).getValues().some(r => r[0] === batchId);
 }
@@ -439,7 +440,16 @@ function siteFromToken_(token) {
 }
 
 function setSiteField_(site, field, value) {
-  sheet_('Sites').getRange(site._row, SHEETS.Sites.indexOf(field) + 1).setValue(value);
+  sheet_('Sites').getRange(site._row, col_('Sites', field)).setValue(value);
+}
+
+/** 1-based column of a heading in a tab. Found by name, so columns can be moved or unused ones deleted. */
+function col_(tab, heading) {
+  const sh = sheet_(tab);
+  const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => key_(String(h).trim()));
+  const i = head.indexOf(key_(heading));
+  if (i < 0) throw err_('setup', 'The "' + tab + '" tab has no "' + heading + '" column. Run setup to add it back.');
+  return i + 1;
 }
 
 /** Gives every named site an ID, a QR token and Active=true where missing. */
@@ -447,9 +457,9 @@ function ensureSiteTokens_() {
   const sh = sheet_('Sites');
   readTable_('Sites').forEach(s => {
     if (!s.Name) return;
-    if (!s.SiteID) sh.getRange(s._row, SHEETS.Sites.indexOf('SiteID') + 1).setValue('S' + String(s._row - 1).padStart(4, '0'));
-    if (!s.Token) sh.getRange(s._row, SHEETS.Sites.indexOf('Token') + 1).setValue(newToken_());
-    if (s.Active === '' || s.Active === null) sh.getRange(s._row, SHEETS.Sites.indexOf('Active') + 1).setValue(true);
+    if (!s.SiteID) sh.getRange(s._row, col_('Sites', 'SiteID')).setValue('S' + String(s._row - 1).padStart(4, '0'));
+    if (!s.Token) sh.getRange(s._row, col_('Sites', 'Token')).setValue(newToken_());
+    if (s.Active === '' || s.Active === null) sh.getRange(s._row, col_('Sites', 'Active')).setValue(true);
   });
 }
 
@@ -487,7 +497,7 @@ function cachedUsers_(refresh) {
 /** Any PIN typed into the PIN column is hashed into PinHash and the plain PIN cleared. */
 function hashPendingPins_() {
   const sh = sheet_('Users');
-  const pinCol = SHEETS.Users.indexOf('PIN') + 1, hashCol = SHEETS.Users.indexOf('PinHash') + 1;
+  const pinCol = col_('Users', 'PIN'), hashCol = col_('Users', 'PinHash');
   let changed = 0;
   readTable_('Users').forEach(u => {
     const pin = String(u.PIN || '').trim();
@@ -656,12 +666,10 @@ function kitUsage_(from, to) {
     if (m && f) (kits[m] = kits[m] || {})[f] = true;
   });
   const names = partNames_(readTable_('Parts'));
-  const head = SHEETS.Movements;
-  const iTime = head.indexOf('Timestamp'), iType = head.indexOf('Type');
   const bySite = {};
   movementColumns_().forEach(m => {
-    if (KIT_USE_TYPES.indexOf(String(m.row[iType])) < 0 || !sites[m.site] || m.qty >= 0) return;
-    const t = m.row[iTime];
+    if (KIT_USE_TYPES.indexOf(String(m.row.Type)) < 0 || !sites[m.site] || m.qty >= 0) return;
+    const t = m.row.Timestamp;
     if (!(t instanceof Date) || t <= from || t > to) return;   // after the last report, up to now
     const siteModels = models[m.site] || [];
     if (!siteModels.some(mod => kits[mod] && kits[mod][m.family])) return;

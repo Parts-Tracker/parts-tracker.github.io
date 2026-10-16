@@ -114,11 +114,12 @@ function setupSheets_() {
     }
   });
   // Keep codes and PINs as text so leading zeros survive
-  ss.getSheetByName('Users').getRange('D:D').setNumberFormat('@');
-  ss.getSheetByName('Parts').getRange('A:C').setNumberFormat('@');
-  ss.getSheetByName('Movements').getRange('D:E').setNumberFormat('@');
-  ss.getSheetByName('VanKit').getRange('A:A').setNumberFormat('@');
-  ss.getSheetByName('Kits').getRange('B:B').setNumberFormat('@');
+  // (columns found by heading, so they can be moved)
+  [['Users', 'PIN'], ['Parts', 'Part Number'], ['Parts', 'Name'], ['Parts', 'ExactCodes'], ['Movements', 'Part Number'],
+   ['Movements', 'ExactCode'], ['VanKit', 'Part Number'], ['Kits', 'Part Number']].forEach(([tab, h]) => {
+    const L = colLetter_(col_(tab, h));
+    ss.getSheetByName(tab).getRange(L + ':' + L).setNumberFormat('@');
+  });
   addMissingSettings_();
   addSmallKits_();
   addNameLookups_();
@@ -128,15 +129,18 @@ function setupSheets_() {
  * The Kits and VanKit tabs show each part's name, looked up from the Parts tab by one formula in the
  * Name heading cell, so names follow any rename and new rows fill in by themselves.
  */
+/** Column number to letters: 1 -> A, 27 -> AA. */
+function colLetter_(n) {
+  let s = '';
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+  return s;
+}
+
 function addNameLookups_() {
-  const col = n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
-  const parts = sheet_('Parts');
-  const pHead = parts.getRange(1, 1, 1, parts.getLastColumn()).getValues()[0].map(String);
-  const pCode = col(pHead.indexOf('Part Number') + 1), pName = col(pHead.indexOf('Name') + 1);
+  const pCode = colLetter_(col_('Parts', 'Part Number')), pName = colLetter_(col_('Parts', 'Name'));
   ['Kits', 'VanKit'].forEach(tab => {
     const sh = sheet_(tab);
-    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
-    const code = col(head.indexOf('Part Number') + 1), name = head.indexOf('Name') + 1;
+    const code = colLetter_(col_(tab, 'Part Number')), name = col_(tab, 'Name');
     // XLOOKUP needs both ranges the same shape, so look up in the Parts code column and return its Name column
     sh.getRange(1, name).setFormula('={"Name";ARRAYFORMULA(IF(' + code + '2:' + code + '="",,IFERROR(XLOOKUP(' + code + '2:' + code +
       ',Parts!' + pCode + '2:' + pCode + ',Parts!' + pName + '2:' + pName + '),"Not in Parts tab")))}');
@@ -147,7 +151,7 @@ function addNameLookups_() {
 /** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */
 function addMissingSettings_() {
   const existing = readTable_('Settings');
-  const col = SHEETS.Settings.indexOf('Value') + 1;
+  const col = col_('Settings', 'Value');
   existing.forEach(r => {
     const k = String(r.Setting).trim();
     if ((SETTINGS_OLD_DEFAULTS[k] || []).indexOf(String(r.Value)) >= 0) {
@@ -191,8 +195,8 @@ function duplicatePins_() {
 function loadSampleData_() {
   setupSheets_();
   appendObjects_('Sites', [
-    { Name: 'Sample Print Co', Address: '1 Test Street, Leeds', Postcode: 'LS1 1AA', Contact: 'Sam Sample', Phone: '', Active: true },
-    { Name: 'Demo Graphics Ltd', Address: '2 Demo Road, Bradford', Postcode: 'BD1 1AA', Contact: 'Dee Demo', Phone: '', Active: true }
+    { Name: 'Sample Print Co', Address: '1 Test Street, Leeds', Postcode: 'LS1 1AA', Active: true },
+    { Name: 'Demo Graphics Ltd', Address: '2 Demo Road, Bradford', Postcode: 'BD1 1AA', Active: true }
   ]);
   ensureSiteTokens_();
   const sites = readTable_('Sites');
