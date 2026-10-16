@@ -24,8 +24,8 @@ const SHEETS = {
   Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
-  Kits: ['Model', 'Part Number', 'Qty'],
-  VanKit: ['Part Number', 'Min', 'Max'],   // one van kit for every engineer
+  Kits: ['Model', 'Part Number', 'Qty', 'Name'],   // Name is a lookup from the Parts tab, filled in by setup
+  VanKit: ['Part Number', 'Min', 'Max', 'Name'],   // one van kit for every engineer
   Settings: ['Setting', 'Value', 'Notes']
 };
 
@@ -557,7 +557,11 @@ function readTable_(name) {
 function appendObjects_(name, objects) {
   if (!objects.length) return;
   const sh = sheet_(name);
-  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  let head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  // Stop at the last column given a value, so lookup columns on the right (Kits/VanKit Name) are left to their formula
+  let width = head.length;
+  while (width > 1 && objects.every(o => o[key_(head[width - 1])] === undefined)) width--;
+  head = head.slice(0, width);
   const values = objects.map(o => head.map(h => (o[key_(h)] === undefined ? '' : o[key_(h)])));
   const start = sh.getLastRow() + 1;
   sh.getRange(start, 1, values.length, head.length).setValues(values);

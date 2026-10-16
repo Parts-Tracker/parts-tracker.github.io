@@ -27,10 +27,13 @@
     setValue(v) { this.sheet.set(this.row, this.col, v); return this; }
     setFontWeight() { return this; }
     setNumberFormat() { return this; }
+    // Keeps the formula and shows the heading an array formula like ={"Name";...} puts in its first cell
+    setFormula(f) { this.sheet.formulas[this.row + ':' + this.col] = f; const m = f.match(/^=\{"([^"]+)"/); this.sheet.set(this.row, this.col, m ? m[1] : ''); return this; }
+    getFormula() { return this.sheet.formulas[this.row + ':' + this.col] || ''; }
   }
 
   class Sheet {
-    constructor(name) { this.name = name; this.data = []; }
+    constructor(name) { this.name = name; this.data = []; this.formulas = {}; }
     getName() { return this.name; }
     set(row, col, v) {
       while (this.data.length < row) this.data.push([]);

@@ -121,6 +121,27 @@ function setupSheets_() {
   ss.getSheetByName('Kits').getRange('B:B').setNumberFormat('@');
   addMissingSettings_();
   addSmallKits_();
+  addNameLookups_();
+}
+
+/**
+ * The Kits and VanKit tabs show each part's name, looked up from the Parts tab by one formula in the
+ * Name heading cell, so names follow any rename and new rows fill in by themselves.
+ */
+function addNameLookups_() {
+  const col = n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+  const parts = sheet_('Parts');
+  const pHead = parts.getRange(1, 1, 1, parts.getLastColumn()).getValues()[0].map(String);
+  const pCode = col(pHead.indexOf('Part Number') + 1), pName = col(pHead.indexOf('Name') + 1);
+  ['Kits', 'VanKit'].forEach(tab => {
+    const sh = sheet_(tab);
+    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    const code = col(head.indexOf('Part Number') + 1), name = head.indexOf('Name') + 1;
+    // XLOOKUP needs both ranges the same shape, so look up in the Parts code column and return its Name column
+    sh.getRange(1, name).setFormula('={"Name";ARRAYFORMULA(IF(' + code + '2:' + code + '="",,IFERROR(XLOOKUP(' + code + '2:' + code +
+      ',Parts!' + pCode + '2:' + pCode + ',Parts!' + pName + '2:' + pName + '),"Not in Parts tab")))}');
+    sh.getRange(1, name).setFontWeight('bold');
+  });
 }
 
 /** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */

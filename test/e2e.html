@@ -349,6 +349,11 @@
     // ---- Daily Up Time Kit email: kit parts used at kit sites, with an order-form button per site ----
     const kitRows = rows('Kits');
     check('setup adds the small kit for SC180, SC170 and EC1100', ['SC180', 'SC170', 'EC1100'].every(m => kitRows.filter(k => k.Model === m).map(k => k.Family).sort().join() === 'P053K0668X,P859K4874X'));
+    const ssx = SpreadsheetApp.getActiveSpreadsheet();
+    const kitsF = ssx.getSheetByName('Kits').getRange(1, 4).getFormula(), vanF = ssx.getSheetByName('VanKit').getRange(1, 4).getFormula();
+    check('Kits and VanKit get a Name column looked up from Parts', ssx.getSheetByName('Kits').getRange(1, 4).getValue() === 'Name' && ssx.getSheetByName('VanKit').getRange(1, 4).getValue() === 'Name' &&
+      kitsF.includes('XLOOKUP(B2:B,Parts!A2:A,Parts!B2:B)') && vanF.includes('XLOOKUP(A2:A,Parts!A2:A,Parts!B2:B)'), [kitsF, vanF]);
+    check('new kit rows leave the Name column to the formula', ssx.getSheetByName('Kits').getRange(2, 4).getValue() === '' && ssx.getSheetByName('Kits').data[1].length <= 3, ssx.getSheetByName('Kits').data[1]);
     check('setup adds the small-kit parts and default settings', rows('Parts').some(p => p.Family === 'P859K4874X' && p.Name === '2nd BTR Assembly') && rows('Settings').some(r => r.Setting === 'OrderFormUrl' && /397ec25e/.test(r.Value)));
     const setRow = k => rows('Settings').find(r => r.Setting === k);
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('PartsReason')._row, 2).setValue('CAR STOCK');   // first version's value
