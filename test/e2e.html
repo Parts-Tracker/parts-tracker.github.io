@@ -354,6 +354,14 @@
     check('Kits and VanKit get a Name column looked up from Parts', ssx.getSheetByName('Kits').getRange(1, 4).getValue() === 'Name' && ssx.getSheetByName('VanKit').getRange(1, 4).getValue() === 'Name' &&
       kitsF.includes('XLOOKUP(B2:B,Parts!A2:A,Parts!B2:B)') && vanF.includes('XLOOKUP(A2:A,Parts!A2:A,Parts!B2:B)'), [kitsF, vanF]);
     check('new kit rows leave the Name column to the formula', ssx.getSheetByName('Kits').getRange(2, 4).getValue() === '' && ssx.getSheetByName('Kits').data[1].length <= 3, ssx.getSheetByName('Kits').data[1]);
+    // The user moved Name next to the part number (Kits: Model, Part Number, Name, Qty); rows added later skip it
+    const kt = ssx.getSheetByName('Kits');
+    kt.data.forEach(r => { const q = r[2], n = r[3]; r[2] = n === undefined ? '' : n; r[3] = q; });
+    kt.getRange(1, 3).setFormula(kitsF);
+    appendObjects_('Kits', [{ Model: 'TESTMODEL', Family: 'P059K6158X', Qty: 5 }]);
+    const tRow = rows('Kits').find(k => k.Model === 'TESTMODEL');
+    check('after moving Name, new rows still skip it and land in the right columns', tRow && tRow.Qty === 5 && tRow.Family === 'P059K6158X' && kt.getRange(tRow._row, 3).getValue() === '', tRow);
+    kt.data.splice(tRow._row - 1, 1);
     check('setup adds the small-kit parts and default settings', rows('Parts').some(p => p.Family === 'P859K4874X' && p.Name === '2nd BTR Assembly') && rows('Settings').some(r => r.Setting === 'OrderFormUrl' && /397ec25e/.test(r.Value)));
     const setRow = k => rows('Settings').find(r => r.Setting === k);
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('PartsReason')._row, 2).setValue('CAR STOCK');   // first version's value

@@ -557,14 +557,19 @@ function readTable_(name) {
 function appendObjects_(name, objects) {
   if (!objects.length) return;
   const sh = sheet_(name);
-  let head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
-  // Stop at the last column given a value, so lookup columns on the right (Kits/VanKit Name) are left to their formula
-  let width = head.length;
-  while (width > 1 && objects.every(o => o[key_(head[width - 1])] === undefined)) width--;
-  head = head.slice(0, width);
-  const values = objects.map(o => head.map(h => (o[key_(h)] === undefined ? '' : o[key_(h)])));
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   const start = sh.getLastRow() + 1;
-  sh.getRange(start, 1, values.length, head.length).setValues(values);
+  // Write only the columns given a value, in runs of neighbouring columns, so a lookup column
+  // (Kits/VanKit Name, wherever it has been moved to) is left to its formula
+  const used = head.map(h => objects.some(o => o[key_(h)] !== undefined));
+  for (let c = 0; c < head.length; c++) {
+    if (!used[c]) continue;
+    let end = c;
+    while (end + 1 < head.length && used[end + 1]) end++;
+    const cols = head.slice(c, end + 1);
+    sh.getRange(start, c + 1, objects.length, cols.length).setValues(objects.map(o => cols.map(h => (o[key_(h)] === undefined ? '' : o[key_(h)]))));
+    c = end;
+  }
   objects.forEach((o, i) => { o._row = start + i; });
 }
 
