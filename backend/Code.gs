@@ -683,8 +683,9 @@ function kitOrderUrl_(cfg, site, models, parts) {
   add('SD CALL No.', cfg.SDCallNo);
   add('Notes', 'Uptime Kit Replenishment - ' + site.Name);
   add('Customer Name', site.Name);
-  // Some of the form's field names carry a hidden space ("5 Part Description "); names that match no field are ignored
-  ['Equipment', 'Equipment ', ' Equipment'].forEach(k => add(k, models.join(', ')));
+  // The form labels this field "Equipment:"; its column name may differ by the colon or a hidden space
+  // ("5 Part Description " has one), so send each spelling: names that match no field are ignored
+  ['Equipment:', 'Equipment: ', 'Equipment', 'Equipment '].forEach(k => add(k, models.join(', ')));
   add('Post Code', site.Postcode);
   add('Engineer Name Attending', site.Name);
   add('Part Requested By', site.Name);
