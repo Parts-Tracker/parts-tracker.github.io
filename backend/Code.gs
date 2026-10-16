@@ -594,14 +594,14 @@ const SETTINGS_DEFAULTS = [
   ['ReportEmail', '', 'Where the daily Up Time Kit email goes. Blank: the Email of the first active admin on the Users tab.'],
   ['ReportHour', 18, 'Hour (0-23, UK time) the daily email is sent. After changing it, run installDailyReport again.'],
   ['OrderFormUrl', 'https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69', 'Smartsheet parts order form opened by the email buttons.'],
-  ['PartsReason', 'Uptime Kit', 'Parts Reason on the order form. Must match one of the form\'s choices exactly.'],
+  ['PartsReason', 'UPTIME KIT', 'Parts Reason on the order form. Must match one of the form\'s choices exactly.'],
   ['Urgency', 'Low - Will Wait - But Not Long', 'Urgency on the order form. Must match one of the form\'s choices exactly.'],
   ['SDCallNo', 'Uptime Kit', 'SD CALL No. on the order form.'],
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
   ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.']
 ];
-// Values from the first version of this report, replaced by setup if still unchanged
-const SETTINGS_OLD_DEFAULTS = { PartsReason: 'CAR STOCK', SDCallNo: 'Up Time Kit' };
+// Values from earlier versions of this report, replaced by setup if still unchanged
+const SETTINGS_OLD_DEFAULTS = { PartsReason: ['CAR STOCK', 'Uptime Kit'], SDCallNo: ['Up Time Kit'] };
 
 // Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site
 const KIT_USE_TYPES = ['CUSTOMER_FITTED', 'USED'];
@@ -636,7 +636,11 @@ function kitUsage_(from, to) {
   const sites = {};
   readTable_('Sites').forEach(s => { sites[String(s.SiteID)] = s; });
   const models = {};
-  readTable_('Printers').forEach(p => { (models[String(p.SiteID)] = models[String(p.SiteID)] || []).push(String(p.Model).trim().toUpperCase()); });
+  readTable_('Printers').forEach(p => {
+    const list = models[String(p.SiteID)] = models[String(p.SiteID)] || [];
+    const m = String(p.Model).trim().toUpperCase();
+    if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once
+  });
   const kits = {};
   readTable_('Kits').forEach(k => {
     const m = String(k.Model).trim().toUpperCase(), f = normaliseCode(k.Family).family;
@@ -667,7 +671,7 @@ function kitUsage_(from, to) {
  * the customer. The link opens the app's order.html, which adds Date Required Onsite (the day the button is
  * pressed + DaysNeeded) and then opens the Smartsheet form with everything else filled in.
  */
-function kitOrderUrl_(cfg, site, parts) {
+function kitOrderUrl_(cfg, site, models, parts) {
   const p = [];
   const add = (k, v) => { if (v !== '' && v != null) p.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v))); };
   add('f', (String(cfg.OrderFormUrl).match(/[0-9a-f]{32}/) || [''])[0]);
@@ -679,6 +683,8 @@ function kitOrderUrl_(cfg, site, parts) {
   add('SD CALL No.', cfg.SDCallNo);
   add('Notes', 'Uptime Kit Replenishment - ' + site.Name);
   add('Customer Name', site.Name);
+  // Some of the form's field names carry a hidden space ("5 Part Description "); names that match no field are ignored
+  ['Equipment', 'Equipment ', ' Equipment'].forEach(k => add(k, models.join(', ')));
   add('Post Code', site.Postcode);
   add('Engineer Name Attending', site.Name);
   add('Part Requested By', site.Name);
@@ -719,7 +725,7 @@ function kitReportHtml_(usage, cfg, title) {
     for (let i = 0; i < u.parts.length; i += FORM_PART_FIELDS.length) {
       const chunk = u.parts.slice(i, i + FORM_PART_FIELDS.length);
       const label = u.parts.length > FORM_PART_FIELDS.length ? 'Order parts ' + (i + 1) + '-' + (i + chunk.length) + ' &rarr;' : 'Order replacements &rarr;';
-      html += '<a href="' + esc_(kitOrderUrl_(cfg, s, chunk)) + '" style="display:inline-block;margin:0 8px 6px 0;background:#01916D;color:#fff;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:bold">' + label + '</a>';
+      html += '<a href="' + esc_(kitOrderUrl_(cfg, s, u.models, chunk)) + '" style="display:inline-block;margin:0 8px 6px 0;background:#01916D;color:#fff;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:bold">' + label + '</a>';
     }
     html += '</div></div>';
   });

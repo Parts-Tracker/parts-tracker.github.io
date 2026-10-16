@@ -129,7 +129,7 @@ function addMissingSettings_() {
   const col = SHEETS.Settings.indexOf('Value') + 1;
   existing.forEach(r => {
     const k = String(r.Setting).trim();
-    if (SETTINGS_OLD_DEFAULTS[k] !== undefined && String(r.Value) === SETTINGS_OLD_DEFAULTS[k]) {
+    if ((SETTINGS_OLD_DEFAULTS[k] || []).indexOf(String(r.Value)) >= 0) {
       sheet_('Settings').getRange(r._row, col).setValue(SETTINGS_DEFAULTS.find(d => d[0] === k)[1]);
     }
   });

@@ -355,7 +355,7 @@
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(17);              // a value the user chose
     runSetup();
     check('setup run again adds nothing twice', rows('Kits').length === kitRows.length && rows('Settings').length === SETTINGS_DEFAULTS.length);
-    check('setup updates the old Parts Reason but keeps chosen values', setRow('PartsReason').Value === 'Uptime Kit' && setRow('ReportHour').Value === 17);
+    check('setup updates the old Parts Reason but keeps chosen values', setRow('PartsReason').Value === 'UPTIME KIT' && setRow('ReportHour').Value === 17);
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(18);
     appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P059K6158X', Qty: 2 }]);
     const a01 = rows('Users').find(u => u.UserID === 'A01');
@@ -365,6 +365,7 @@
     sendDailyKitReport(); mail.length = 0;   // start from now
     await sleep(5);
     const demo = rows('Sites')[1];
+    appendObjects_('Printers', [{ SiteID: demo.SiteID, Model: 'SC180', Serial: '2' }, { SiteID: demo.SiteID, Model: 'EC1100', Serial: '3' }]);   // two SC180s and an EC1100
     const kitEngSession = call({ action: 'login', site: site.Token, pin: '1111' }).session;
     const kitStart = new Date(Date.now() - 1);
     call({ action: 'submit', site: demo.Token, batchId: 'k1', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K0668X', qty: 1 }, { code: 'P004E1900X', qty: 1 }] });
@@ -386,7 +387,7 @@
     check('order button fills the form for delivery to the customer',
       q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Engineer Name Attending') === 'Demo Graphics Ltd' && q.get('Part Requested By') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' &&
       q.get('1 Part No.') === 'P053K0668X' && q.get('1 Qty') === '1' && q.get('1 Description') === 'Suction Filter' &&
-      q.get('Parts Reason') === 'Uptime Kit' && q.get('Urgency') === 'Low - Will Wait - But Not Long' && q.get('Pre 10:30') === 'No' && q.get('ByBox/Collection') === 'No' &&
+      q.get('Parts Reason') === 'UPTIME KIT' && q.get('Equipment') === 'SC180, EC1100' && q.get('Urgency') === 'Low - Will Wait - But Not Long' && q.get('Pre 10:30') === 'No' && q.get('ByBox/Collection') === 'No' &&
       q.get('SD CALL No.') === 'Uptime Kit' && q.get('Notes') === 'Uptime Kit Replenishment - Demo Graphics Ltd', demoLink);
     check('no email, ByBox or date in the email link', !q.has('Engineer Email') && !q.has('Email') && !q.has('ByBox Location / Collection Point') && !q.has('Date Required Onsite'));
     // order.html adds the date when the button is pressed, then opens the form (location.replace captured instead)
