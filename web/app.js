@@ -11,7 +11,7 @@
     CUSTOMER_FITTED: { title: 'Parts we fitted ourselves', hint: 'Scan each part you fitted.', engineer: false, done: 'Recorded as fitted' },
     COUNT: { title: 'Stock count', hint: 'Scan every part here. Use + when there is more than one.', engineer: true, done: 'Count saved' }
   };
-  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count' };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine' };
   // Each action has its own brand colour (see the tone-* classes in app.css)
   const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue' };
   const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count' };
@@ -1005,8 +1005,14 @@
     try {
       const r = await api({ action: 'admin', session: state.session });
       if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session' || r.code === 'forbidden') askPin(loadAdmin, 'Admin sign in'); return; }
+      applyAdmin(r);
+    } catch (e) { $('adminSummary').textContent = e.code === 'offline' ? 'No connection. The dashboard needs signal.' : e.message; }
+  }
+
+  /** Takes in a full set of dashboard data (from loading, or returned by a change) and redraws. */
+  function applyAdmin(r) {
       // Older backends send fewer details per site; fill the gaps so the dashboard still works
-      r.sites = (r.sites || []).map(s => Object.assign({ town: '', postcode: '', printers: [], lastActivity: '', items: 0 }, s));
+      r.sites = (r.sites || []).map(s => Object.assign({ town: '', postcode: '', printers: [], machines: [], lastActivity: '', items: 0, active: true }, s));
       admin.data = r;
       admin.parts = new Map((r.parts || []).map(([family, name, codes]) => [family, { family, name, codes: String(codes || '') }]));
       admin.byFamily = new Map();
@@ -1023,23 +1029,30 @@
       renderSites();
       if (admin.tab === 'qr') renderQr();
       if (admin.tab === 'new') renderNewParts();
-    } catch (e) { $('adminSummary').textContent = e.code === 'offline' ? 'No connection. The dashboard needs signal.' : e.message; }
+      // Still looking at one site: redraw it from the new data
+      if (!$('admin-site').hidden && admin.siteId) {
+        const i = r.sites.findIndex(s => s.id === admin.siteId);
+        if (i >= 0) showSiteDetail(i, true);
+      }
   }
+
+  const openSites = () => admin.data.sites.filter(s => s.active);
 
   const adminPartName = f => (admin.parts.get(f) || {}).name || 'Unknown part';
   const siteLine = s => [s.town, s.postcode].filter(Boolean).join(' · ');
 
   function renderAdminStats() {
     const d = admin.data;
-    const items = d.sites.reduce((n, s) => n + s.items, 0);
-    const holding = d.sites.filter(s => s.items > 0).length;
-    const never = d.sites.filter(s => !s.lastCount).length;
+    const open = openSites();
+    const items = open.reduce((n, s) => n + s.items, 0);
+    const holding = open.filter(s => s.items > 0).length;
+    const never = open.filter(s => !s.lastCount).length;
     const stat = (value, label, tone, onclick) => el(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' tone-' + tone : ''), onclick },
       el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label + (onclick ? ' ›' : '')));
     const box = $('adminStats'); box.textContent = '';
     const toCheck = d.unreviewedParts || 0;
     box.append(
-      stat(d.sites.length, 'sites', 'green'),
+      stat(open.length, 'sites', 'green'),
       stat(items, 'items at ' + holding + (holding === 1 ? ' site' : ' sites'), 'lime'),
       stat(never, 'never counted', never ? 'pink' : 'blue'),
       stat(toCheck, toCheck === 1 ? 'new part to check' : 'new parts to check', toCheck ? 'purple' : 'blue', toCheck ? showNewParts : null));
@@ -1165,15 +1178,17 @@
   function renderSites() {
     if (!admin.data) return;
     const sort = $('siteSort').value;
-    const rows = filteredSites().sort((a, b) =>
+    // Closed sites go to the bottom of the list
+    const rows = filteredSites().sort((a, b) => (b.active - a.active) || (
       sort === 'items' ? b.items - a.items || a.name.localeCompare(b.name)
         : sort === 'count' ? (a.lastCount || '').localeCompare(b.lastCount || '') || a.name.localeCompare(b.name)
-          : a.name.localeCompare(b.name));
-    $('siteCount').textContent = rows.length + ' of ' + admin.data.sites.length + ' sites';
+          : a.name.localeCompare(b.name)));
+    const shut = rows.filter(s => !s.active).length;
+    $('siteCount').textContent = (rows.length - shut) + ' of ' + openSites().length + ' sites' + (shut ? ' · ' + shut + ' closed' : '');
     const ul = $('siteList'); ul.textContent = '';
-    rows.forEach(s => ul.append(el('li', { class: 'clickable', onclick: () => showSiteDetail(s.i) },
+    rows.forEach(s => ul.append(el('li', { class: 'clickable' + (s.active ? '' : ' closed'), onclick: () => showSiteDetail(s.i) },
       el('div', { class: 'item-main' },
-        el('div', { class: 'item-name' }, s.name),
+        el('div', { class: 'item-name' }, s.name, s.active ? null : el('span', { class: 'tag' }, 'closed')),
         el('div', { class: 'item-sub' }, [siteLine(s), s.printers.join(', ')].filter(Boolean).join(' · ')),
         el('div', { class: 'item-sub' + (s.lastCount ? '' : ' warn-text') }, s.lastCount ? 'Counted ' + when(s.lastCount) : 'Never counted')),
       el('div', { class: 'qty' }, s.items))));
@@ -1181,11 +1196,12 @@
   }
 
   // --- One site ---
-  function showSiteDetail(i) {
+  function showSiteDetail(i, keepScroll) {
     const s = admin.data.sites[i];
+    admin.siteId = s.id;
     const head = $('siteDetailHead'); head.textContent = '';
     head.append(
-      el('div', { class: 'hero-label' }, 'Site ' + s.id),
+      el('div', { class: 'hero-label' }, 'Site ' + s.id + (s.active ? '' : ' · CLOSED')),
       el('h1', { class: 'site-name' }, s.name),
       el('div', { class: 'hero-address' }, siteLine(s)),
       el('div', { class: 'chips' }, s.printers.map(m => el('span', {}, m))),
@@ -1197,9 +1213,171 @@
       el('div', { class: 'qty' + (l.qty < 0 ? ' neg' : '') }, l.qty))));
     if (!lines.length) ul.append(el('li', { class: 'muted' }, 'No stock recorded.'));
     $('siteDetailOpen').href = siteUrl(s.token);
-    ['find', 'sites', 'qr'].forEach(t => { $('admin-' + t).hidden = true; });
+    $('siteDetailOpen').hidden = !s.active;
+    renderMachines(s);
+    $('machineAdd').hidden = !s.active;
+    $('siteClose').textContent = s.active ? 'Close this site' : 'Reopen this site';
+    $('siteClose').className = 'btn' + (s.active ? ' danger' : ' primary');
+    ['find', 'sites', 'new', 'qr'].forEach(t => { $('admin-' + t).hidden = true; });
     $('admin-site').hidden = false;
-    window.scrollTo(0, 0);
+    if (!keepScroll) window.scrollTo(0, 0);
+  }
+
+  // --- Sites and machines: add, edit, move, close ---
+  const curSite = () => admin.data.sites.find(s => s.id === admin.siteId);
+
+  /** Sends one change; the reply carries the refreshed dashboard. Returns the reply, or null after showing the error. */
+  async function adminChange(req, errBox, button) {
+    if (button) { button.disabled = true; button.dataset.label = button.textContent; button.textContent = 'Saving…'; }
+    errBox.hidden = true;
+    try {
+      const r = await api(Object.assign({ session: state.session }, req));
+      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code });
+      admin.qrBuilt = false;
+      applyAdmin(r.admin);
+      return r;
+    } catch (e) {
+      errBox.textContent = e.code === 'offline' ? 'No connection. Changes need signal.' : e.message;
+      errBox.hidden = false;
+      return null;
+    } finally {
+      if (button) { button.disabled = false; button.textContent = button.dataset.label; }
+    }
+  }
+
+  function field(label, input) { return el('label', { class: 'field' }, label, input); }
+
+  /** Add a site (no site given) or edit one. */
+  function openSiteForm(s) {
+    const name = el('input', { class: 'input', value: s ? s.name : '', autocomplete: 'off' });
+    const town = el('input', { class: 'input', value: s ? s.town : '', autocomplete: 'off' });
+    const postcode = el('input', { class: 'input', value: s ? s.postcode : '', autocomplete: 'off', autocapitalize: 'characters' });
+    const err = el('div', { class: 'error', hidden: true });
+    const save = el('button', { class: 'primary', onclick: async () => {
+      const r = await adminChange({ action: 'siteSave', id: s ? s.id : undefined, name: name.value, town: town.value, postcode: postcode.value }, err, save);
+      if (!r) return;
+      closeSheet();
+      const i = admin.data.sites.findIndex(x => x.id === r.id);
+      if (i >= 0) showSiteDetail(i);
+      toast(s ? 'Site updated' : 'Site added. Its QR code is ready in the QR codes tab.');
+    } }, s ? 'Save' : 'Add site');
+    openSheet(s ? 'Edit site' : 'Add a site', [
+      s ? null : el('p', { class: 'muted' }, 'Name, town and postcode only: no customer contact details.'),
+      field('Site name', name), field('Town', town), field('Postcode', postcode), err,
+      el('div', { class: 'buttons' }, save, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    setTimeout(() => name.focus(), 50);
+  }
+
+  function closeOrReopenSite() {
+    const s = curSite();
+    const err = el('div', { class: 'error', hidden: true });
+    const go = el('button', { class: s.active ? 'danger' : 'primary', onclick: async () => {
+      const r = await adminChange({ action: 'siteSave', id: s.id, name: s.name, town: s.town, postcode: s.postcode, active: !s.active }, err, go);
+      if (!r) return;
+      closeSheet();
+      toast(s.active ? s.name + ' closed' : s.name + ' reopened');
+    } }, s.active ? 'Close site' : 'Reopen site');
+    openSheet(s.active ? 'Close ' + s.name + '?' : 'Reopen ' + s.name + '?', [
+      el('p', { class: 'muted' }, s.active
+        ? 'Its QR code stops working and it leaves the lists. Its history is kept, and you can reopen it later.' +
+          (s.machines.length ? ' Move or remove its ' + s.machines.length + (s.machines.length === 1 ? ' machine' : ' machines') + ' first if they have gone elsewhere.' : '')
+        : 'Its QR code works again and it returns to the lists.'),
+      err, el('div', { class: 'buttons' }, go, el('button', { onclick: closeSheet }, 'Cancel'))]);
+  }
+
+  function renderMachines(s) {
+    const ul = $('siteMachines'); ul.textContent = '';
+    s.machines.forEach(m => ul.append(el('li', {},
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, m.model, (admin.data.kits || {})[m.model] ? el('span', { class: 'tag current' }, 'kit') : null),
+        el('div', { class: 'item-sub mono' }, m.serial ? 'Serial ' + m.serial : 'No serial number')),
+      s.active ? el('div', { class: 'machine-actions' },
+        el('button', { class: 'small', onclick: () => openMoveMachine(s, m) }, 'Move'),
+        el('button', { class: 'small', onclick: () => openRemoveMachine(s, m) }, 'Remove')) : null)));
+    if (!s.machines.length) ul.append(el('li', { class: 'muted' }, 'No machines listed.'));
+  }
+
+  function openAddMachine() {
+    const s = curSite();
+    const models = admin.data.models || [];
+    const pick = el('select', { class: 'input', 'aria-label': 'Model' },
+      el('option', { value: '' }, 'Choose the model…'), models.map(m => el('option', { value: m }, m)), el('option', { value: '__new' }, 'New model (type it)…'));
+    const typed = el('input', { class: 'input', placeholder: 'e.g. REVORIA PRESS SC285S', autocomplete: 'off', autocapitalize: 'characters' });
+    const typedField = field('New model name', typed); typedField.hidden = true;
+    pick.addEventListener('change', () => { typedField.hidden = pick.value !== '__new'; if (!typedField.hidden) typed.focus(); });
+    const serial = el('input', { class: 'input', autocomplete: 'off', autocapitalize: 'characters' });
+    const err = el('div', { class: 'error', hidden: true });
+    const save = el('button', { class: 'primary', onclick: async () => {
+      const model = pick.value === '__new' ? typed.value : pick.value;
+      if (!model.trim()) { err.textContent = 'Choose the model.'; err.hidden = false; return; }
+      const r = await adminChange({ action: 'machineAdd', siteId: s.id, model, serial: serial.value }, err, save);
+      if (!r) return;
+      closeSheet();
+      toast('Added ' + model.trim().toUpperCase() + ' at ' + s.name);
+    } }, 'Add machine');
+    openSheet('Add a machine to ' + s.name, [field('Model', pick), typedField, field('Serial number', serial), err,
+      el('div', { class: 'buttons' }, save, el('button', { onclick: closeSheet }, 'Cancel'))]);
+  }
+
+  /** One kit's worth of the model's kit parts held at the site (what "move the kit" would move). */
+  function kitToMove(s, model) {
+    const kit = (admin.data.kits || {})[model];
+    if (!kit) return null;
+    const held = {};
+    admin.bySite[admin.data.sites.indexOf(s)].forEach(l => { held[l.family] = l.qty; });
+    return Object.keys(kit).map(f => ({ family: f, qty: Math.min(held[f] || 0, kit[f] || held[f] || 0) })).filter(l => l.qty > 0);
+  }
+
+  function openMoveMachine(s, m) {
+    const input = el('input', { class: 'input', placeholder: 'Site name, town or postcode', autocomplete: 'off' });
+    const results = el('div', {});
+    const render = () => {
+      results.textContent = '';
+      const q = input.value.trim().toLowerCase();
+      const list = openSites().filter(x => x.id !== s.id && (!q || [x.name, x.town, x.postcode, x.postcode.replace(/\s/g, '')].join(' ').toLowerCase().includes(q)))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      list.slice(0, 30).forEach(x => results.append(el('button', { class: 'pick', onclick: () => confirmMove(s, m, x) },
+        el('span', {}, el('span', { class: 'item-name' }, x.name), el('span', { class: 'item-sub' }, siteLine(x))))));
+      if (!list.length) results.append(el('p', { class: 'muted' }, 'No sites match.'));
+    };
+    input.addEventListener('input', render);
+    openSheet('Move ' + m.model + (m.serial ? ' ' + m.serial : '') + ' to…', [input, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    render();
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function confirmMove(s, m, to) {
+    const kit = kitToMove(s, m.model);
+    const tick = el('input', { type: 'checkbox', checked: true });
+    const err = el('div', { class: 'error', hidden: true });
+    const kitBox = kit && kit.length ? el('div', { class: 'kit-move' },
+      el('label', { class: 'check' }, tick, ' Move its Up Time Kit stock too'),
+      el('ul', { class: 'list compact' }, kit.map(l => el('li', {},
+        el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, adminPartName(l.family)), el('div', { class: 'item-sub mono' }, l.family)),
+        el('div', { class: 'qty' }, l.qty)))))
+      : kit ? el('p', { class: 'muted' }, 'No ' + m.model + ' kit stock is recorded at ' + s.name + ', so only the machine moves.') : null;
+    const go = el('button', { class: 'primary', onclick: async () => {
+      const r = await adminChange({ action: 'machineMove', row: m.row, model: m.model, serial: m.serial, toSiteId: to.id, moveKit: !!(kit && kit.length && tick.checked) }, err, go);
+      if (!r) return;
+      closeSheet();
+      toast('Moved ' + m.model + ' to ' + to.name + (r.moved && r.moved.length ? ' with ' + r.moved.reduce((n, l) => n + l.qty, 0) + ' kit items' : ''));
+    } }, 'Move machine');
+    openSheet('Move to ' + to.name + '?', [
+      el('p', {}, m.model + (m.serial ? ' (serial ' + m.serial + ')' : '') + ' moves from ' + s.name + ' to ' + to.name + '.'),
+      kitBox, err, el('div', { class: 'buttons' }, go, el('button', { onclick: closeSheet }, 'Cancel'))]);
+  }
+
+  function openRemoveMachine(s, m) {
+    const err = el('div', { class: 'error', hidden: true });
+    const go = el('button', { class: 'danger', onclick: async () => {
+      const r = await adminChange({ action: 'machineRemove', row: m.row, model: m.model, serial: m.serial }, err, go);
+      if (!r) return;
+      closeSheet();
+      toast('Removed ' + m.model + ' from ' + s.name);
+    } }, 'Remove machine');
+    openSheet('Remove ' + m.model + '?', [
+      el('p', { class: 'muted' }, 'Use this when the machine is taken out of service. If it has gone to another site, use Move instead. Stock at the site is not changed.'),
+      err, el('div', { class: 'buttons' }, go, el('button', { onclick: closeSheet }, 'Cancel'))]);
   }
 
   // --- QR codes: built when the tab is opened; untick a card to leave it out of the print ---
@@ -1228,7 +1406,7 @@
     grid.append(el('div', { class: 'row3 no-print qr-select' },
       el('button', { class: 'small', onclick: () => grid.querySelectorAll('.qr-card input').forEach(c => { c.checked = true; c.dispatchEvent(new Event('change')); }) }, 'Select all'),
       el('button', { class: 'small', onclick: () => grid.querySelectorAll('.qr-card input').forEach(c => { c.checked = false; c.dispatchEvent(new Event('change')); }) }, 'Select none')));
-    admin.data.sites.map((s, i) => Object.assign({ i }, s)).sort((a, b) => a.name.localeCompare(b.name)).forEach(s => {
+    admin.data.sites.map((s, i) => Object.assign({ i }, s)).filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name)).forEach(s => {
       const url = siteUrl(s.token);
       const card = el('div', { class: 'qr-card' });
       const tick = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Print ' + s.name });
@@ -1294,6 +1472,10 @@
     $('siteQuery').addEventListener('input', renderSites);
     $('siteSort').addEventListener('change', renderSites);
     $('siteBack').addEventListener('click', () => showAdminTab('sites'));
+    $('siteAdd').addEventListener('click', () => openSiteForm(null));
+    $('siteEdit').addEventListener('click', () => openSiteForm(curSite()));
+    $('machineAdd').addEventListener('click', openAddMachine);
+    $('siteClose').addEventListener('click', closeOrReopenSite);
     $('newBack').addEventListener('click', () => showAdminTab(tabBeforeNew));
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && state.scanner) state.scanner.stop();

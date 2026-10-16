@@ -216,6 +216,21 @@ button.stat { display: block; width: 100%; min-height: 0; text-align: left; bord
 button.stat .stat-label { color: var(--tone-ink, var(--text)); font-weight: 600; }
 .new-part { display: grid; gap: 4px; }
 .new-part .field { display: block; margin-top: 6px; font-size: 0.85rem; font-weight: 600; }
+/* Admin: sites and machines */
+.field { display: block; margin-top: 10px; font-size: 0.85rem; font-weight: 600; }
+.field select.input { appearance: auto; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.card-head .section-title, .card-head p { margin: 0; }
+#siteEdit { margin: 0 0 10px; }
+#siteClose { width: 100%; margin-top: 8px; }
+.machine-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.machine-actions button { min-height: 40px; padding: 6px 10px; }
+.list li.closed { opacity: 0.6; }
+button.danger, .btn.danger { color: var(--bad); border-color: var(--bad); }
+button.danger:disabled { opacity: 0.6; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 8px 0 4px; }
+.check input { width: 20px; height: 20px; }
+.list.compact li { padding-top: 6px; padding-bottom: 6px; }
 .new-part .btn { margin-top: 8px; }
 #newBack { margin-bottom: 4px; }
 .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 4px 0 12px; }

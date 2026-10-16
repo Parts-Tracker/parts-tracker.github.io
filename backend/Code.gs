@@ -73,7 +73,11 @@ const ACTIONS = {
   admin: actionAdmin,
   van: actionVan,
   sites: actionSites,
-  reviewPart: actionReviewPart
+  reviewPart: actionReviewPart,
+  siteSave: actionSiteSave,
+  machineAdd: actionMachineAdd,
+  machineMove: actionMachineMove,
+  machineRemove: actionMachineRemove
 };
 
 // ---------------------------------------------------------------- actions
@@ -296,9 +300,12 @@ function actionAdmin(req) {
     const t = m.row.Timestamp;
     if (t instanceof Date && (!lastActivity[m.site] || t > lastActivity[m.site])) lastActivity[m.site] = t;
   });
-  const printers = {};
-  readTable_('Printers').forEach(p => { (printers[String(p.SiteID)] = printers[String(p.SiteID)] || []).push(String(p.Model)); });
-  const sites = readTable_('Sites').filter(s => isTrue_(s.Active) && s.Name);
+  const machines = {};
+  readTable_('Printers').forEach(p => {
+    (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || '') });
+  });
+  // Closed sites are included (active: false) so they can be reopened
+  const sites = readTable_('Sites').filter(s => s.Name);
   const index = {};
   sites.forEach((s, i) => { index[String(s.SiteID)] = i; });
   const stock = [];
@@ -314,8 +321,12 @@ function actionAdmin(req) {
     sites: sites.map(s => ({
       id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token,
       items: totals[s.SiteID] || 0, lastCount: iso_(s.LastCount), lastActivity: iso_(lastActivity[String(s.SiteID)]),
-      printers: printers[String(s.SiteID)] || []
+      printers: (machines[String(s.SiteID)] || []).map(m => m.model),
+      machines: machines[String(s.SiteID)] || [],
+      active: isTrue_(s.Active)
     })),
+    models: knownModels_(),
+    kits: kitsByModel_(),
     stock: stock,
     parts: parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]),
     unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length,
@@ -323,6 +334,150 @@ function actionAdmin(req) {
       family: p.Family, name: p.Name, codes: String(p.ExactCodes || ''), addedBy: p.AddedBy, addedAt: iso_(p.AddedAt)
     }))
   };
+}
+
+// ---------------------------------------------------------------- sites and machines (admin)
+
+function requireAdmin_(req) {
+  const user = sessionUser_(req.session, false);
+  if (String(user.Role).toLowerCase() !== 'admin') throw err_('forbidden', 'Admins only.');
+  return user;
+}
+
+const cleanText_ = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
+/** Model names are matched exactly against the Kits tab, so they are stored one way: capitals, single spaces. */
+const cleanModel_ = v => cleanText_(v, 40).toUpperCase();
+
+/** Every model in use or with a kit, for the admin's pick list. */
+function knownModels_() {
+  const set = {};
+  readTable_('Printers').forEach(p => { const m = cleanModel_(p.Model); if (m) set[m] = true; });
+  readTable_('Kits').forEach(k => { const m = cleanModel_(k.Model); if (m) set[m] = true; });
+  return Object.keys(set).sort();
+}
+
+/** { MODEL: { family: qty } } from the Kits tab. */
+function kitsByModel_() {
+  const out = {};
+  readTable_('Kits').forEach(k => {
+    const m = cleanModel_(k.Model), f = normaliseCode(k.Family).family;
+    if (m && f) (out[m] = out[m] || {})[f] = Number(k.Qty) || 0;
+  });
+  return out;
+}
+
+function withLock_(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
+function siteById_(id, mustBeOpen) {
+  const site = readTable_('Sites').find(s => String(s.SiteID) === String(id || ''));
+  if (!site) throw err_('bad_request', 'That site was not found.');
+  if (mustBeOpen && !isTrue_(site.Active)) throw err_('bad_request', site.Name + ' is closed. Reopen it first.');
+  return site;
+}
+
+/**
+ * Add a site (no id) or edit one (id). req: { session, id?, name, town, postcode, active? }
+ * A new site gets the next SiteID and a QR token. Closing a site (active: false) keeps its history.
+ * Returns the refreshed admin data and the site's id.
+ */
+function actionSiteSave(req) {
+  requireAdmin_(req);
+  const name = cleanText_(req.name, 120), town = cleanText_(req.town, 80), postcode = cleanText_(req.postcode, 10).toUpperCase();
+  if (!name) throw err_('bad_request', 'Type the site name.');
+  const id = withLock_(() => {
+    const sites = readTable_('Sites');
+    const same = s => String(s.Name).trim().toLowerCase() === name.toLowerCase() && String(s.Postcode).replace(/\s/g, '').toUpperCase() === postcode.replace(/\s/g, '');
+    if (req.id) {
+      const site = siteById_(req.id, false);
+      if (sites.some(s => s !== site && String(s.SiteID) !== String(site.SiteID) && isTrue_(s.Active) && same(s))) throw err_('bad_request', 'Another site already has that name and postcode.');
+      setSiteField_(site, 'Name', name);
+      setSiteField_(site, 'Address', town);
+      setSiteField_(site, 'Postcode', postcode);
+      if (req.active !== undefined) setSiteField_(site, 'Active', !!req.active);
+      return site.SiteID;
+    }
+    if (sites.some(s => isTrue_(s.Active) && same(s))) throw err_('bad_request', 'That site is already on the list.');
+    const next = sites.reduce((n, s) => { const m = String(s.SiteID).match(/^S(\d+)$/); return m ? Math.max(n, Number(m[1])) : n; }, 1000) + 1;
+    const newId = 'S' + String(next).padStart(4, '0');
+    appendObjects_('Sites', [{ SiteID: newId, Name: name, Address: town, Postcode: postcode, Token: newToken_(), Active: true }]);
+    return newId;
+  });
+  return { id: id, admin: actionAdmin(req) };
+}
+
+/** Finds a Printers row and checks it is still the machine the admin was looking at. */
+function machineAt_(req) {
+  const m = readTable_('Printers').find(p => p._row === Number(req.row));
+  if (!m || cleanModel_(m.Model) !== cleanModel_(req.model) || String(m.Serial || '') !== String(req.serial || '')) {
+    throw err_('bad_request', 'That machine has changed in the Sheet. Refresh and try again.');
+  }
+  return m;
+}
+
+/** Add a machine to a site. req: { session, siteId, model, serial } */
+function actionMachineAdd(req) {
+  requireAdmin_(req);
+  const model = cleanModel_(req.model), serial = cleanText_(req.serial, 40);
+  if (!model) throw err_('bad_request', 'Choose the model.');
+  withLock_(() => {
+    const site = siteById_(req.siteId, true);
+    if (serial) {
+      const dup = readTable_('Printers').find(p => String(p.Serial || '').trim().toLowerCase() === serial.toLowerCase());
+      if (dup) {
+        const at = readTable_('Sites').find(s => String(s.SiteID) === String(dup.SiteID));
+        throw err_('bad_request', 'Serial ' + serial + ' is already listed at ' + (at ? at.Name : dup.SiteID) + '. Use Move instead.');
+      }
+    }
+    appendObjects_('Printers', [{ SiteID: site.SiteID, Model: model, Serial: serial }]);
+  });
+  return { admin: actionAdmin(req) };
+}
+
+/**
+ * Move a machine to another site. With moveKit, one kit's worth of the model's kit parts held at the old site
+ * (up to each part's kit quantity) moves with it, recorded as MOVED_OUT / MOVED_IN.
+ * req: { session, row, model, serial, toSiteId, moveKit }
+ */
+function actionMachineMove(req) {
+  const user = requireAdmin_(req);
+  let moved = [];
+  withLock_(() => {
+    const m = machineAt_(req);
+    const from = siteById_(m.SiteID, false), to = siteById_(req.toSiteId, true);
+    if (String(from.SiteID) === String(to.SiteID)) throw err_('bad_request', 'The machine is already at ' + to.Name + '.');
+    sheet_('Printers').getRange(m._row, col_('Printers', 'SiteID')).setValue(to.SiteID);
+    if (req.moveKit) moved = moveKitStock_(user, m, from, to);
+  });
+  return { moved: moved, admin: actionAdmin(req) };
+}
+
+function moveKitStock_(user, machine, from, to) {
+  const model = cleanModel_(machine.Model);
+  const kit = kitsByModel_()[model] || {};
+  const held = stockBySite_(from.SiteID);
+  const names = partNames_(readTable_('Parts'));
+  const lines = Object.keys(kit).map(f => ({ family: f, qty: Math.min(held[f] || 0, kit[f] || held[f] || 0) })).filter(l => l.qty > 0);
+  if (!lines.length) return [];
+  const now = new Date(), batch = Utilities.getUuid();
+  const what = model + (machine.Serial ? ' ' + machine.Serial : '');
+  const row = (site, qty, type, note, l) => ({
+    MovementID: Utilities.getUuid(), Timestamp: now, SiteID: site, Family: l.family, ExactCode: l.family, Qty: qty, Type: type,
+    JobNo: '', By: user.Name, Role: 'admin', Device: 'Admin panel', Note: note, BatchID: batch
+  });
+  appendObjects_('Movements', lines.map(l => row(from.SiteID, -l.qty, 'MOVED_OUT', 'Kit moved with ' + what + ' to ' + to.Name, l))
+    .concat(lines.map(l => row(to.SiteID, l.qty, 'MOVED_IN', 'Kit moved with ' + what + ' from ' + from.Name, l))));
+  return lines.map(l => ({ family: l.family, name: names[l.family] || '', qty: l.qty }));
+}
+
+/** Take a machine off the list (out of service). req: { session, row, model, serial } */
+function actionMachineRemove(req) {
+  requireAdmin_(req);
+  withLock_(() => { const m = machineAt_(req); sheet_('Printers').deleteRow(m._row); });
+  return { admin: actionAdmin(req) };
 }
 
 /** Admin approves a part added from a scan, optionally correcting its name. req: { session, family, name? } */

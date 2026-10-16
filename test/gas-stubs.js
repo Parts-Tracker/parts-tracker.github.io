@@ -55,6 +55,7 @@
       return new Range(this, a, b, c || 1, d || 1);
     }
     setFrozenRows() {}
+    deleteRow(r) { this.data.splice(r - 1, 1); }
   }
 
   const sheets = {};

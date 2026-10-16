@@ -239,18 +239,24 @@
             <option value="count">Longest since count</option>
           </select>
         </div>
-        <p class="muted" id="siteCount"></p>
+        <div class="card-head"><p class="muted" id="siteCount"></p><button class="small" id="siteAdd">+ Add site</button></div>
         <div class="card"><ul class="list" id="siteList"></ul></div>
       </div>
 
       <div class="admin-panel" id="admin-site" hidden>
         <button class="small no-print" id="siteBack">‹ All sites</button>
         <div class="hero" id="siteDetailHead"></div>
+        <button class="small" id="siteEdit">Edit site details</button>
+        <div class="card">
+          <div class="card-head"><h2 class="section-title">Machines</h2><button class="small" id="machineAdd">+ Add machine</button></div>
+          <ul class="list" id="siteMachines"></ul>
+        </div>
         <div class="card">
           <h2 class="section-title">Stock</h2>
           <ul class="list" id="siteDetailStock"></ul>
         </div>
         <a class="btn" id="siteDetailOpen">Open this site in the app</a>
+        <button class="btn" id="siteClose">Close this site</button>
       </div>
 
       <div class="admin-panel" id="admin-new" hidden>

@@ -475,6 +475,86 @@
     window.dispatchEvent(new Event('afterprint'));
     check('page returns to normal after printing one', !document.body.classList.contains('print-solo') && !document.querySelector('.qr-card.solo'));
 
+    // ---- Admin: add and edit sites, add / move / remove machines, close and reopen ----
+    const sheetBtn = text => [...$('sheetBody').querySelectorAll('button')].find(b => b.textContent.trim() === text);
+    const sheetInputs = () => [...$('sheetBody').querySelectorAll('input')];
+    const sheetErr = () => { const e = $('sheetBody').querySelector('.error'); return e && !e.hidden ? e.textContent : ''; };
+    const closeSheetNow = () => $('sheetBackdrop').click();
+    document.querySelector('[data-admin-tab=sites]').click();
+    $('siteAdd').click();
+    check('Add site opens a form with name, town and postcode', $('sheetTitle').textContent === 'Add a site' && sheetInputs().length === 3);
+    let [fName, fTown, fPc] = sheetInputs();
+    fName.value = '  New  Print Ltd '; fTown.value = 'York'; fPc.value = 'yo1 7hh';
+    sheetBtn('Add site').click();
+    check('new site saved and shown', await waitFor(() => $('sheet').classList.contains('hidden') && !$('admin-site').hidden && /New Print Ltd/.test($('siteDetailHead').textContent)), sheetErr());
+    const newSite = rows('Sites').find(s => s.Name === 'New Print Ltd');
+    check('new site gets the next ID, a QR token, tidy name and capital postcode', newSite && newSite.SiteID === 'S1001' && String(newSite.Token).length === 32 && isTrue_(newSite.Active) && newSite.Postcode === 'YO1 7HH' && newSite.Address === 'York', newSite);
+    check('new site is in the list and the QR tab', A && $('siteCount').textContent.startsWith('3 of 3') && call({ action: 'admin', session: A.state.session }).sites.some(s => s.token === newSite.Token));
+    $('siteAdd').click();
+    [fName, fTown, fPc] = sheetInputs(); fName.value = 'new print ltd'; fPc.value = 'YO17HH';
+    sheetBtn('Add site').click();
+    check('the same site cannot be added twice', await waitFor(() => /already on the list/.test(sheetErr())), sheetErr());
+    closeSheetNow();
+    $('siteEdit').click();
+    [fName, fTown, fPc] = sheetInputs(); fTown.value = 'York Central';
+    sheetBtn('Save').click();
+    check('site details can be edited', await waitFor(() => rows('Sites').find(s => s.SiteID === 'S1001').Address === 'York Central' && /York Central/.test($('siteDetailHead').textContent)));
+
+    // Machines: pick a model from the list, or type a new one
+    $('machineAdd').click();
+    const modelPick = $('sheetBody').querySelector('select');
+    check('model list offers the models in use and with kits', [...modelPick.options].map(o => o.value).includes('PC1120') && [...modelPick.options].map(o => o.value).includes('SC180'));
+    modelPick.value = '__new'; modelPick.dispatchEvent(new Event('change'));
+    sheetInputs()[0].value = 'revoria  sc285s'; sheetInputs()[1].value = 'SN-1';
+    sheetBtn('Add machine').click();
+    check('new model typed in is stored in capitals', await waitFor(() => rows('Printers').some(p => p.SiteID === 'S1001' && p.Model === 'REVORIA SC285S' && p.Serial === 'SN-1')));
+    $('machineAdd').click();
+    $('sheetBody').querySelector('select').value = 'SC180'; sheetInputs()[1].value = 'sn-1';
+    sheetBtn('Add machine').click();
+    check('a serial number already listed is refused', await waitFor(() => /already listed at New Print Ltd/.test(sheetErr())), sheetErr());
+    closeSheetNow();
+    check('machines listed on the site page', $('siteMachines').children.length === 1 && /REVORIA SC285S/.test($('siteMachines').textContent) && /SN-1/.test($('siteMachines').textContent));
+
+    // Move the sample site's PC1120 here, taking one kit's worth of its kit stock (kit: P059K6158X x2)
+    const heldBefore = stockOf(site.SiteID, 'P059K6158X');
+    $('siteBack').click();
+    [...$('siteList').querySelectorAll('li')].find(li => /Sample Print Co/.test(li.textContent)).click();
+    const pcRow = [...$('siteMachines').querySelectorAll('li')].find(li => /PC1120/.test(li.textContent));
+    check('kit machines are tagged', pcRow && /kit/.test(pcRow.textContent));
+    [...pcRow.querySelectorAll('button')].find(b => b.textContent === 'Move').click();
+    const moveInput = sheetInputs()[0]; moveInput.value = 'york'; moveInput.dispatchEvent(new Event('input'));
+    const pickNew = [...$('sheetBody').querySelectorAll('.pick')];
+    check('move: search for the new site', pickNew.length === 1 && /New Print Ltd/.test(pickNew[0].textContent));
+    pickNew[0].click();
+    const expectMove = Math.min(heldBefore, 2);
+    check('move offers to take the kit stock, listing it', $('sheetTitle').textContent === 'Move to New Print Ltd?' && sheetInputs()[0].checked && /P059K6158X/.test($('sheetBody').textContent), $('sheetBody').textContent);
+    sheetBtn('Move machine').click();
+    check('machine moved to the new site', await waitFor(() => rows('Printers').some(p => p.SiteID === 'S1001' && p.Model === 'PC1120') && !rows('Printers').some(p => p.SiteID === site.SiteID)));
+    check('one kit\'s worth of kit stock moved with it', stockOf(site.SiteID, 'P059K6158X') === heldBefore - expectMove && stockOf('S1001', 'P059K6158X') === expectMove &&
+      rows('Movements').filter(m => m.Type === 'MOVED_OUT' || m.Type === 'MOVED_IN').length === (expectMove ? 2 : 0), [heldBefore, stockOf(site.SiteID, 'P059K6158X'), stockOf('S1001', 'P059K6158X')]);
+    check('moved kit stock is not counted as used in the kit email', !kitUsage_(new Date(Date.now() - 60000), new Date(Date.now() + 1000)).some(u => u.site.SiteID === 'S1001'));
+    check('new site now has the PC1120 kit tag', await waitFor(() => { const d = call({ action: 'admin', session: A.state.session }); return d.sites.find(s => s.id === 'S1001').printers.includes('PC1120'); }));
+
+    // Remove a machine, close and reopen the site
+    $('siteBack').click();
+    [...$('siteList').querySelectorAll('li')].find(li => /New Print Ltd/.test(li.textContent)).click();
+    const scRow = [...$('siteMachines').querySelectorAll('li')].find(li => /REVORIA SC285S/.test(li.textContent));
+    [...scRow.querySelectorAll('button')].find(b => b.textContent === 'Remove').click();
+    sheetBtn('Remove machine').click();
+    check('machine removed', await waitFor(() => !rows('Printers').some(p => p.Model === 'REVORIA SC285S') && !/REVORIA SC285S/.test($('siteMachines').textContent)));
+    $('siteClose').click();
+    sheetBtn('Close site').click();
+    check('site closed: QR stops working, history kept', await waitFor(() => !isTrue_(rows('Sites').find(s => s.SiteID === 'S1001').Active)) &&
+      call({ action: 'bootstrap', site: newSite.Token }).code === 'bad_site' && stockOf('S1001', 'P059K6158X') === expectMove);
+    check('closed site greyed at the bottom, out of the counts and QR codes', await waitFor(() => /CLOSED/.test($('siteDetailHead').textContent)) && $('adminStats').querySelector('.stat-value').textContent === '2' &&
+      (() => { $('siteBack').click(); const li = [...$('siteList').querySelectorAll('li')]; return li[li.length - 1].classList.contains('closed') && /closed/.test($('siteCount').textContent); })());
+    [...$('siteList').querySelectorAll('li')].find(li => /New Print Ltd/.test(li.textContent)).click();
+    $('siteClose').click();
+    sheetBtn('Reopen site').click();
+    check('site reopened', await waitFor(() => isTrue_(rows('Sites').find(s => s.SiteID === 'S1001').Active)) && call({ action: 'bootstrap', site: newSite.Token }).ok);
+    const engLogin = call({ action: 'login', site: site.Token, pin: '1111' });
+    check('engineers cannot change sites or machines', call({ action: 'siteSave', session: engLogin.session, name: 'X' }).code === 'forbidden' && call({ action: 'machineAdd', session: engLogin.session, siteId: 'S1001', model: 'SC180' }).code === 'forbidden');
+
     // ---- New-part sheet has no stray text ----
     $('doneHome').click();
     A.handleCode('FFB888K77770', 'photo');
