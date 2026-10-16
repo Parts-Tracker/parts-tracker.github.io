@@ -25,7 +25,8 @@ const SHEETS = {
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
   Kits: ['Model', 'Part Number', 'Qty'],
-  VanKit: ['Part Number', 'Min', 'Max']   // one van kit for every engineer
+  VanKit: ['Part Number', 'Min', 'Max'],   // one van kit for every engineer
+  Settings: ['Setting', 'Value', 'Notes']
 };
 
 // Which movement types each role may record, and the sign of their quantity
@@ -584,4 +585,170 @@ function err_(code, message) {
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ---------------------------------------------------------------- daily Up Time Kit report
+
+/** Settings tab rows: [Setting, default Value, Notes]. Setup adds any that are missing. */
+const SETTINGS_DEFAULTS = [
+  ['ReportEmail', '', 'Where the daily Up Time Kit email goes. Blank: the Email of the OrderEngineer user.'],
+  ['ReportHour', 18, 'Hour (0-23, UK time) the daily email is sent. After changing it, run installDailyReport again.'],
+  ['OrderEngineer', '', 'UserID whose name, email, postcode and ByBox fill the order form. Blank: the first active admin.'],
+  ['OrderFormUrl', 'https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69', 'Smartsheet parts order form opened by the email buttons.'],
+  ['PartsReason', 'CAR STOCK', 'Parts Reason on the order form. Must match one of the form\'s choices exactly.'],
+  ['SDCallNo', 'Up Time Kit', 'SD CALL No. on the order form.']
+];
+
+// Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site
+const KIT_USE_TYPES = ['CUSTOMER_FITTED', 'USED'];
+
+// The order form's part fields are not named consistently (keep in step with web/app.js)
+const FORM_PART_FIELDS = [
+  ['1 Part No.', '1 Qty', '1 Description'], ['2 Part No.', '2 Qty', '2 Description'], ['3 Part No.', '3 Qty', '3 Description'],
+  ['4 Part No.', '4 Qty', '4 Description'], ['5 Part code', '5 qty', '5 Part Description '], ['6 part number', '6 Qty', '6 part description'],
+  ['7 part code', '7 qty', '7 part description'], ['8 part code', '8 qty', '8 part description'], ['9 part code', '9 qty', '9 description']
+];
+
+function settings_() {
+  const out = {};
+  SETTINGS_DEFAULTS.forEach(d => { out[d[0]] = d[1]; });
+  let rows = [];
+  try { rows = readTable_('Settings'); } catch (e) { /* tab not set up yet: defaults */ }
+  rows.forEach(r => { const k = String(r.Setting || '').trim(); if (k && r.Value !== '' && r.Value !== null) out[k] = r.Value; });
+  return out;
+}
+
+/** The engineer the order form is filled in for, and where the email goes. */
+function reportPeople_(cfg) {
+  const users = readTable_('Users').filter(u => isTrue_(u.Active));
+  const id = String(cfg.OrderEngineer || '').trim();
+  const engineer = (id && users.find(u => String(u.UserID) === id)) ||
+    users.find(u => String(u.Role).toLowerCase() === 'admin' && u.Email) || {};
+  return { engineer: engineer, to: String(cfg.ReportEmail || engineer.Email || '').trim() };
+}
+
+/**
+ * Kit parts used at customer sites between two times, grouped by site. A site's kit is every Kits row
+ * whose Model matches one of its printers. Van stock and parts outside the site's kit are left out.
+ */
+function kitUsage_(from, to) {
+  const sites = {};
+  readTable_('Sites').forEach(s => { sites[String(s.SiteID)] = s; });
+  const models = {};
+  readTable_('Printers').forEach(p => { (models[String(p.SiteID)] = models[String(p.SiteID)] || []).push(String(p.Model).trim().toUpperCase()); });
+  const kits = {};
+  readTable_('Kits').forEach(k => {
+    const m = String(k.Model).trim().toUpperCase(), f = normaliseCode(k.Family).family;
+    if (m && f) (kits[m] = kits[m] || {})[f] = true;
+  });
+  const names = partNames_(readTable_('Parts'));
+  const head = SHEETS.Movements;
+  const iTime = head.indexOf('Timestamp'), iType = head.indexOf('Type');
+  const bySite = {};
+  movementColumns_().forEach(m => {
+    if (KIT_USE_TYPES.indexOf(String(m.row[iType])) < 0 || !sites[m.site] || m.qty >= 0) return;
+    const t = m.row[iTime];
+    if (!(t instanceof Date) || t <= from || t > to) return;   // after the last report, up to now
+    const siteModels = models[m.site] || [];
+    if (!siteModels.some(mod => kits[mod] && kits[mod][m.family])) return;
+    const s = bySite[m.site] = bySite[m.site] || { site: sites[m.site], models: siteModels, parts: {} };
+    s.parts[m.family] = s.parts[m.family] || { family: m.family, name: names[m.family] || '', qty: 0 };
+    s.parts[m.family].qty += -m.qty;
+  });
+  return Object.keys(bySite).map(k => {
+    const s = bySite[k];
+    return { site: s.site, models: s.models, parts: Object.keys(s.parts).map(f => s.parts[f]).sort((a, b) => a.family.localeCompare(b.family)) };
+  }).sort((a, b) => String(a.site.Name).localeCompare(String(b.site.Name)));
+}
+
+/** Smartsheet order form link for one site's used kit parts (at most 9 lines, the form's limit). */
+function kitOrderUrl_(cfg, engineer, site, parts) {
+  const p = [];
+  const add = (k, v) => { if (v !== '' && v != null) p.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v))); };
+  add('Parts Reason', cfg.PartsReason);
+  add('Urgency', 'Med - As soon as possible');
+  add('Pre 10:30', 'No');
+  add('ByBox/Collection', 'Yes');
+  add('SD CALL No.', cfg.SDCallNo);
+  add('Notes', 'Up Time Kit Replenishment - ' + site.Name);
+  add('Date Required Onsite', Utilities.formatDate(new Date(Date.now() + 86400000), Session.getScriptTimeZone(), 'dd/MM/yyyy'));
+  add('Customer Name', site.Name);
+  add('Post Code', site.Postcode);
+  add('Engineer Name Attending', engineer.Name);
+  add('Part Requested By', engineer.Name);
+  if (engineer.Email) { add('Engineer Email', engineer.Email); add('Email', engineer.Email); add('Send me a copy of my responses', 'true'); }
+  if (engineer.ByBox) add('ByBox Location / Collection Point', String(engineer.ByBox).replace(/My ByBox location is\s*/i, '').trim());
+  parts.slice(0, FORM_PART_FIELDS.length).forEach((l, i) => {
+    add(FORM_PART_FIELDS[i][0], l.family);
+    add(FORM_PART_FIELDS[i][1], l.qty);
+    add(FORM_PART_FIELDS[i][2], l.name);
+  });
+  if (parts.length > 4) add('Order Additional Parts', 'true');
+  const base = String(cfg.OrderFormUrl);
+  return base + (base.indexOf('?') >= 0 ? '&' : '?') + p.join('&');
+}
+
+function esc_(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** The email: one block per site with its used kit parts and an order button (more than 9 parts: one button per 9). */
+function kitReportHtml_(usage, cfg, engineer, title) {
+  let html = '<div style="font-family:Arial,sans-serif;color:#333;max-width:680px">' +
+    '<h2 style="color:#01916D;margin:0 0 4px">Up Time Kit replenishment</h2>' +
+    '<p style="margin:0 0 16px;color:#666">' + esc_(title) + '</p>';
+  usage.forEach(u => {
+    const s = u.site;
+    html += '<div style="border:2px solid #01916D;border-radius:10px;margin:0 0 16px;overflow:hidden">' +
+      '<div style="background:#E6F4F0;padding:10px 14px">' +
+      '<div style="font-weight:bold;font-size:16px">' + esc_(s.Name) + '</div>' +
+      '<div style="font-size:13px;color:#555">' + esc_([s.Address, s.Postcode].filter(Boolean).join(', ')) +
+      (u.models.length ? ' &middot; ' + esc_(u.models.join(', ')) : '') + '</div></div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
+      '<tr style="text-align:left;color:#666"><th style="padding:6px 14px">Part</th><th style="padding:6px 14px">Part number</th><th style="padding:6px 14px">Used</th></tr>';
+    u.parts.forEach(l => {
+      html += '<tr style="border-top:1px solid #eee"><td style="padding:6px 14px">' + esc_(l.name || 'Unknown part') + '</td>' +
+        '<td style="padding:6px 14px;font-family:monospace">' + esc_(l.family) + '</td>' +
+        '<td style="padding:6px 14px;font-weight:bold;color:#E0356C">' + l.qty + '</td></tr>';
+    });
+    html += '</table><div style="padding:10px 14px">';
+    for (let i = 0; i < u.parts.length; i += FORM_PART_FIELDS.length) {
+      const chunk = u.parts.slice(i, i + FORM_PART_FIELDS.length);
+      const label = u.parts.length > FORM_PART_FIELDS.length ? 'Order parts ' + (i + 1) + '-' + (i + chunk.length) + ' &rarr;' : 'Order replacements &rarr;';
+      html += '<a href="' + esc_(kitOrderUrl_(cfg, engineer, s, chunk)) + '" style="display:inline-block;margin:0 8px 6px 0;background:#01916D;color:#fff;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:bold">' + label + '</a>';
+    }
+    html += '</div></div>';
+  });
+  return html + '<p style="font-size:12px;color:#888">Sent by Parts Tracker. Check the form before pressing Submit in Smartsheet.</p></div>';
+}
+
+/**
+ * Sends the kit report for everything used since the last report (first run: since midnight).
+ * Run daily by the trigger that installDailyReport sets up. Sends nothing on a day with no kit use.
+ */
+function sendDailyKitReport() {
+  const props = PropertiesService.getScriptProperties();
+  const now = new Date();
+  const tz = Session.getScriptTimeZone();
+  const last = Number(props.getProperty('kitReportUpTo')) || 0;
+  const from = last ? new Date(last) : new Date(Utilities.formatDate(now, tz, "yyyy-MM-dd'T'00:00:00XXX"));
+  const sent = sendKitReport_(from, now, 'Kit parts used ' + Utilities.formatDate(from, tz, 'EEE d MMM HH:mm') + ' to ' + Utilities.formatDate(now, tz, 'EEE d MMM HH:mm'), false);
+  props.setProperty('kitReportUpTo', String(now.getTime()));
+  return sent;
+}
+
+/** Builds and sends one report. Returns how many sites were in it (0: nothing sent unless always is true). */
+function sendKitReport_(from, to, title, always, subjectPrefix) {
+  const cfg = settings_();
+  const people = reportPeople_(cfg);
+  if (!people.to) throw new Error('No email address for the kit report. Fill in ReportEmail on the Settings tab.');
+  const usage = kitUsage_(from, to);
+  if (!usage.length && !always) return 0;
+  const tz = Session.getScriptTimeZone();
+  const subject = (subjectPrefix || '') + 'Up Time Kit replenishment - ' + Utilities.formatDate(to, tz, 'EEE d MMM yyyy') +
+    (usage.length ? ' (' + usage.length + (usage.length === 1 ? ' site)' : ' sites)') : '');
+  const html = usage.length ? kitReportHtml_(usage, cfg, people.engineer, title)
+    : '<p style="font-family:Arial,sans-serif">No Up Time Kit parts were used. (' + esc_(title) + ')</p>';
+  MailApp.sendEmail({ to: people.to, subject: subject, htmlBody: html, name: 'Parts Tracker' });
+  return usage.length;
 }

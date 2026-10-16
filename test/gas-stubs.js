@@ -85,7 +85,30 @@
     computeHmacSha256Signature: (value, key) => fakeHash('hmac:' + key + ':' + value),
     base64EncodeWebSafe: v => b64(typeof v === 'string' ? toBytes(v) : v),
     base64DecodeWebSafe: s => Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => (ch.charCodeAt(0) << 24) >> 24),
-    newBlob: bytes => ({ getDataAsString: () => fromBytes(bytes) })
+    newBlob: bytes => ({ getDataAsString: () => fromBytes(bytes) }),
+    // The Java-style patterns the backend uses: yyyy MM MMM dd d HH mm EEE XXX and 'quoted text'
+    formatDate: (date, tz, pattern) => {
+      const parts = {};
+      new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short', timeZoneName: 'longOffset' })
+        .formatToParts(date).forEach(p => { parts[p.type] = p.value; });
+      const mon = new Intl.DateTimeFormat('en-GB', { timeZone: tz, month: 'short' }).format(date);
+      const off = (parts.timeZoneName || 'GMT').replace('GMT', '') || '+00:00';
+      const map = { yyyy: parts.year, MMM: mon, MM: parts.month, dd: parts.day, d: String(Number(parts.day)), HH: parts.hour, mm: parts.minute, EEE: parts.weekday, XXX: off };
+      return pattern.replace(/'([^']*)'|yyyy|MMM|MM|dd|d|HH|mm|EEE|XXX/g, (m, lit) => lit !== undefined ? lit : map[m]);
+    }
+  };
+  window.Session = { getScriptTimeZone: () => 'Europe/London' };
+  const sentMail = [];
+  window.MailApp = { sendEmail: msg => { sentMail.push(msg); } };
+  const triggers = [];
+  window.ScriptApp = {
+    getProjectTriggers: () => triggers.slice(),
+    deleteTrigger: t => { triggers.splice(triggers.indexOf(t), 1); },
+    newTrigger: fn => {
+      const t = { fn, getHandlerFunction: () => fn };
+      const b = { timeBased: () => b, everyDays: n => { t.days = n; return b; }, atHour: h => { t.hour = h; return b; }, create: () => { triggers.push(t); return t; } };
+      return b;
+    }
   };
 
   const cache = {};
@@ -95,5 +118,5 @@
   window.PropertiesService = { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) };
   window.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: s => ({ setMimeType() { return this; }, getContent: () => s }) };
 
-  window.__gas = { sheets, cache, props };
+  window.__gas = { sheets, cache, props, sentMail, triggers };
 })();

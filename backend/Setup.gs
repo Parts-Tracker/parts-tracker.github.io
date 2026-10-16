@@ -52,6 +52,31 @@ function runSetup() {
   console.log('Sheets are ready in "' + spreadsheet_().getName() + '". Next: add sites, printers and users, then deploy the web app.');
 }
 
+/** Turns on the daily Up Time Kit email at the ReportHour on the Settings tab. Run again after changing the hour. */
+function installDailyReport() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'sendDailyKitReport').forEach(t => ScriptApp.deleteTrigger(t));
+  const cfg = settings_();
+  const hour = Math.min(23, Math.max(0, Math.floor(Number(cfg.ReportHour)) || 18));
+  ScriptApp.newTrigger('sendDailyKitReport').timeBased().everyDays(1).atHour(hour).create();
+  const to = reportPeople_(cfg).to;
+  console.log('Daily Up Time Kit email is on: sent around ' + hour + ':00 each day to ' + (to || '(no address: fill in ReportEmail on the Settings tab)') + ', only on days a kit part is used.');
+}
+
+/** Sends a test email now with the kit parts used in the last 7 days (marked TEST). Does not affect the daily email. */
+function testDailyKitReport() {
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 86400000);
+  const n = sendKitReport_(from, to, 'TEST: kit parts used in the last 7 days', true, '[TEST] ');
+  console.log('Test email sent to ' + reportPeople_(settings_()).to + ' with ' + n + ' site(s).');
+}
+
+/** Turns the daily Up Time Kit email off. */
+function removeDailyReport() {
+  const t = ScriptApp.getProjectTriggers().filter(x => x.getHandlerFunction() === 'sendDailyKitReport');
+  t.forEach(x => ScriptApp.deleteTrigger(x));
+  console.log(t.length ? 'Daily Up Time Kit email turned off.' : 'The daily email was not on.');
+}
+
 function runSampleData() {
   loadSampleData_();
   console.log('Sample data added. Test PINs: engineer 1111, admin 9999. Delete the sample rows before going live.');
@@ -93,6 +118,34 @@ function setupSheets_() {
   ss.getSheetByName('Parts').getRange('A:C').setNumberFormat('@');
   ss.getSheetByName('Movements').getRange('D:E').setNumberFormat('@');
   ss.getSheetByName('VanKit').getRange('A:A').setNumberFormat('@');
+  ss.getSheetByName('Kits').getRange('B:B').setNumberFormat('@');
+  addMissingSettings_();
+  addSmallKits_();
+}
+
+/** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */
+function addMissingSettings_() {
+  const have = readTable_('Settings').map(r => String(r.Setting).trim());
+  const rows = SETTINGS_DEFAULTS.filter(d => have.indexOf(d[0]) < 0).map(d => ({ Setting: d[0], Value: d[1], Notes: d[2] }));
+  appendObjects_('Settings', rows);
+}
+
+// SC180, SC170 and EC1100 sites keep a small kit: one 2nd BTR Assembly and one Suction Filter
+const SMALL_KIT = [['P859K4874X', '2nd BTR Assembly', 1], ['P053K0668X', 'Suction Filter', 1]];
+const SMALL_KIT_MODELS = ['SC180', 'SC170', 'EC1100'];
+
+/** Adds the small kit for each of those models that has no Kits rows yet, and its parts to the parts list. */
+function addSmallKits_() {
+  const kits = readTable_('Kits');
+  const rows = [];
+  SMALL_KIT_MODELS.forEach(m => {
+    if (kits.some(k => String(k.Model).trim().toUpperCase() === m)) return;
+    SMALL_KIT.forEach(p => rows.push({ Model: m, Family: p[0], Qty: p[2] }));
+  });
+  appendObjects_('Kits', rows);
+  const parts = readTable_('Parts').map(p => p.Family);
+  appendObjects_('Parts', SMALL_KIT.filter(p => parts.indexOf(p[0]) < 0)
+    .map(p => ({ Family: p[0], Name: p[1], ExactCodes: '', Reviewed: true, AddedBy: 'Setup', AddedAt: new Date() })));
 }
 
 function duplicatePins_() {

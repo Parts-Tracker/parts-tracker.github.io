@@ -40,9 +40,9 @@
     check('part code column is called Part Number', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').getRange(1, 1).getValue() === 'Part Number');
     const partsTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts');
     partsTab.getRange(1, 1).setValue('Family');   // a Sheet made before the rename
-    check('old "Family" heading is still read', rows('Parts').length === 9 && rows('Parts').every(p => /^P/.test(p.Family)));
+    check('old "Family" heading is still read', rows('Parts').length === 11 && rows('Parts').every(p => /^P/.test(p.Family)));
     runSetup();
-    check('setup renames "Family" to "Part Number"', partsTab.getRange(1, 1).getValue() === 'Part Number' && rows('Parts').length === 9 && !partsTab.getRange(1, 8).getValue());
+    check('setup renames "Family" to "Part Number"', partsTab.getRange(1, 1).getValue() === 'Part Number' && rows('Parts').length === 11 && !partsTab.getRange(1, 8).getValue());
 
     // ---- Code rule parity between backend and app ----
     await loadScript('../web/codes.js');
@@ -65,7 +65,7 @@
     const A = window.PTApp;
 
     check('home shows the site', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co'), $('siteName').textContent);
-    check('parts list downloaded to the phone', A.state.parts.size === 9, A.state.parts.size);
+    check('parts list downloaded to the phone', A.state.parts.size === 11, A.state.parts.size);
 
     // ---- Customer books in a delivery, including a new part ----
     document.querySelector('[data-mode=BOOK_IN]').click();
@@ -345,6 +345,49 @@
     check('approving marks it reviewed with the corrected name', await waitFor(() => { const p = rows('Parts').find(x => x.Family === 'P999K1234X'); return p && isTrue_(p.Reviewed) && p.Name === 'Test Widget Assembly'; }));
     check('figure drops to 0 and the list closes', await waitFor(() => $('admin-new').hidden && !$('admin-find').hidden && !$('adminStats').querySelector('button.stat') && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
     check('admin data no longer counts it', call({ action: 'admin', session: A.state.session }).unreviewedParts === 0);
+
+    // ---- Daily Up Time Kit email: kit parts used at kit sites, with an order-form button per site ----
+    const kitRows = rows('Kits');
+    check('setup adds the small kit for SC180, SC170 and EC1100', ['SC180', 'SC170', 'EC1100'].every(m => kitRows.filter(k => k.Model === m).map(k => k.Family).sort().join() === 'P053K0668X,P859K4874X'));
+    check('setup adds the small-kit parts and default settings', rows('Parts').some(p => p.Family === 'P859K4874X' && p.Name === '2nd BTR Assembly') && rows('Settings').some(r => r.Setting === 'OrderFormUrl' && /397ec25e/.test(r.Value)));
+    runSetup();
+    check('setup run again adds nothing twice', rows('Kits').length === kitRows.length && rows('Settings').length === SETTINGS_DEFAULTS.length);
+    appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P059K6158X', Qty: 2 }]);
+    const a01 = rows('Users').find(u => u.UserID === 'A01');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, SHEETS.Users.indexOf('Email') + 1).setValue('admin@example.com');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users').getRange(a01._row, SHEETS.Users.indexOf('ByBox') + 1).setValue('My ByBox location is Leeds Station');
+    const mail = window.__gas.sentMail;
+    sendDailyKitReport(); mail.length = 0;   // start from now
+    await sleep(5);
+    const demo = rows('Sites')[1];
+    const kitEngSession = call({ action: 'login', site: site.Token, pin: '1111' }).session;
+    const kitStart = new Date(Date.now() - 1);
+    call({ action: 'submit', site: demo.Token, batchId: 'k1', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K0668X', qty: 1 }, { code: 'P004E1900X', qty: 1 }] });
+    call({ action: 'submit', site: site.Token, session: kitEngSession, batchId: 'k2', type: 'USED', jobNo: '12345', items: [{ code: 'P059K6158X', qty: 1 }] });
+    call({ action: 'submit', site: site.Token, batchId: 'k3', type: 'BOOK_IN', items: [{ code: 'P059K6158X', qty: 2 }] });
+    call({ action: 'submit', van: true, session: kitEngSession, batchId: 'k4', type: 'USED', jobNo: '12346', items: [{ code: 'P053K0668X', qty: 1 }] });
+    const usage = kitUsage_(kitStart, new Date(Date.now() + 1000));
+    const qtyAt = (name, fam) => ((usage.find(u => u.site.Name === name) || { parts: [] }).parts.find(p => p.family === fam) || {}).qty;
+    check('kit use: customer-fitted and engineer-used kit parts at kit sites', usage.length === 2 && qtyAt('Demo Graphics Ltd', 'P053K0668X') === 1 && qtyAt('Sample Print Co', 'P059K6158X') === 1, JSON.stringify(usage.map(u => [u.site.Name, u.parts])));
+    check('kit use leaves out non-kit parts, deliveries and van use', !qtyAt('Demo Graphics Ltd', 'P004E1900X') && usage.every(u => u.parts.length === 1));
+    await sleep(5);
+    check('daily report sent for 2 sites', sendDailyKitReport() === 2 && mail.length === 1 && mail[0].to === 'admin@example.com' && /\(2 sites\)/.test(mail[0].subject), mail[0] && mail[0].subject);
+    const body = mail[0].htmlBody;
+    const links = [...body.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+    const demoLink = links.find(l => l.includes('Demo%20Graphics')) || '';
+    const q = new URLSearchParams(demoLink.split('?')[1] || '');
+    check('email lists each site with its parts', /Demo Graphics Ltd/.test(body) && /Sample Print Co/.test(body) && /Suction Filter/.test(body) && !/P004E1900X/.test(body) && links.length === 2);
+    check('order button fills the van form for the customer', demoLink.startsWith('https://app.smartsheet.com/b/form/397ec25e0b1c44e3a4b4dcc952edba69?') &&
+      q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' && q.get('1 Part No.') === 'P053K0668X' && q.get('1 Qty') === '1' && q.get('1 Description') === 'Suction Filter' &&
+      q.get('SD CALL No.') === 'Up Time Kit' && q.get('Parts Reason') === 'CAR STOCK' && q.get('Engineer Email') === 'admin@example.com' && q.get('ByBox Location / Collection Point') === 'Leeds Station' && /^\d\d\/\d\d\/\d{4}$/.test(q.get('Date Required Onsite')), demoLink);
+    mail.length = 0;
+    check('nothing used since: no email', sendDailyKitReport() === 0 && mail.length === 0);
+    testDailyKitReport();
+    check('test email always sends, marked TEST', mail.length === 1 && /^\[TEST\]/.test(mail[0].subject) && /Demo Graphics/.test(mail[0].htmlBody));
+    installDailyReport(); installDailyReport();
+    check('daily email trigger installed once at 18:00', window.__gas.triggers.length === 1 && window.__gas.triggers[0].hour === 18 && window.__gas.triggers[0].fn === 'sendDailyKitReport');
+    removeDailyReport();
+    check('daily email can be turned off', window.__gas.triggers.length === 0);
 
     // Find a part: by code and by name
     $('partQuery').value = '059K6158'; $('partQuery').dispatchEvent(new Event('input'));
