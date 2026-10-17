@@ -616,7 +616,8 @@
         el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : ''))),
       el('div', { class: 'qty' }, b.qty))));
     const zl = $('zeroList'); zl.textContent = '';
-    const missing = mode === 'COUNT' ? Object.keys(stock).filter(f => stock[f] > 0 && !state.basket.some(b => b.family === f)) : [];
+    // Parts on record that weren't scanned, including any below zero (a count is how those get put right)
+    const missing = mode === 'COUNT' ? Object.keys(stock).filter(f => stock[f] !== 0 && !state.basket.some(b => b.family === f)) : [];
     missing.forEach(f => zl.append(el('li', {},
       el('input', { type: 'checkbox', checked: true, value: f, id: 'z-' + f, 'aria-label': 'Set ' + f + ' to 0' }),
       el('label', { class: 'item-main', for: 'z-' + f },
