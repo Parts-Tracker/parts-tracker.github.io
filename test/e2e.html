@@ -573,6 +573,26 @@
     $('doneHome').click();
     A.handleCode('FFB888K77770', 'photo');
     check('new-part sheet has no stray text', await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list') && !/null|undefined/.test($('sheetBody').textContent), $('sheetBody').textContent);
+
+    // ---- Fill every kit site with an assumed full kit ----
+    const kitModels = kitsByModel_();
+    const kitSites = rows('Sites').filter(s => isTrue_(s.Active) && rows('Printers').some(p => String(p.SiteID) === String(s.SiteID) && kitModels[cleanModel_(p.Model)]));
+    const fullKit = s => { const want = {}; [...new Set(rows('Printers').filter(p => String(p.SiteID) === String(s.SiteID)).map(p => cleanModel_(p.Model)))]
+      .filter(m => kitModels[m]).forEach(m => Object.keys(kitModels[m]).forEach(f => { want[f] = (want[f] || 0) + kitModels[m][f]; })); return want; };
+    rows('Sites').filter(s => s.SiteID === 'S1001').forEach(s => SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getRange(s._row, col_('Sites', 'Active')).setValue(false));
+    const closedBefore = JSON.stringify(stockBySite_('S1001'));
+    const movesBefore = rows('Movements').length;
+    previewKitStock();
+    check('kit preview changes nothing', rows('Movements').length === movesBefore);
+    sendDailyKitReport(); mail.length = 0;
+    fillKitStock();
+    check('every open kit site now holds at least a full kit', kitSites.length > 0 && kitSites.filter(s => s.SiteID !== 'S1001').every(s => { const st = stockBySite_(s.SiteID), w = fullKit(s); return Object.keys(w).every(f => (st[f] || 0) >= w[f]); }));
+    check('assumed kit stock is a BOOK_IN marked not yet checked', rows('Movements').slice(movesBefore).length > 0 && rows('Movements').slice(movesBefore).every(m => m.Type === 'BOOK_IN' && /not yet checked/.test(m.Note) && m.Qty > 0));
+    check('closed sites get no kit', JSON.stringify(stockBySite_('S1001')) === closedBefore);
+    const movesAfter = rows('Movements').length;
+    fillKitStock();
+    check('running it again adds nothing', rows('Movements').length === movesAfter);
+    check('filling kits does not trigger the kit email', sendDailyKitReport() === 0 && mail.length === 0);
   } catch (e) {
     check('test run crashed', false, String(e && e.stack || e));
   }

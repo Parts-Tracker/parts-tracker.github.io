@@ -77,6 +77,62 @@ function removeDailyReport() {
   console.log(t.length ? 'Daily Up Time Kit email turned off.' : 'The daily email was not on.');
 }
 
+/**
+ * Lists what fillKitStock would add, without changing anything. Check the Execution log, then run fillKitStock.
+ */
+function previewKitStock() {
+  const plan = kitTopUp_();
+  logKitPlan_(plan, 'Would add');
+  console.log('Nothing has been changed. Run fillKitStock to add this stock.');
+}
+
+/**
+ * Gives every open site a full Up Time Kit for each machine model on the Kits tab (two SC180s = one kit),
+ * assuming it is all there until an engineer counts it on site. Parts already held are topped up, not doubled,
+ * so running it again adds nothing. Recorded as BOOK_IN, which the daily kit email ignores.
+ */
+function fillKitStock() {
+  withLock_(() => {
+    const plan = kitTopUp_();
+    const now = new Date(), batch = Utilities.getUuid();
+    const rows = [];
+    plan.forEach(p => p.lines.forEach(l => rows.push({
+      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: p.site.SiteID, Family: l.family, ExactCode: l.family, Qty: l.qty,
+      Type: 'BOOK_IN', JobNo: '', By: 'Kit setup', Role: 'admin', Device: 'Setup', Note: 'Assumed full kit, not yet checked on site', BatchID: batch
+    })));
+    if (rows.length) appendObjects_('Movements', rows);
+    logKitPlan_(plan, 'Added');
+  });
+}
+
+/** For each open site: the kit parts it should hold and how many to add to reach a full kit. */
+function kitTopUp_() {
+  const kits = kitsByModel_();
+  const models = {};
+  readTable_('Printers').forEach(p => {
+    const m = cleanModel_(p.Model), id = String(p.SiteID);
+    const list = models[id] = models[id] || [];
+    if (m && kits[m] && list.indexOf(m) < 0) list.push(m);
+  });
+  const held = {};
+  movementColumns_().forEach(m => { const h = held[m.site] = held[m.site] || {}; h[m.family] = (h[m.family] || 0) + m.qty; });
+  return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && (models[String(s.SiteID)] || []).length).map(s => {
+    const id = String(s.SiteID), want = {};
+    models[id].forEach(m => Object.keys(kits[m]).forEach(f => { want[f] = (want[f] || 0) + kits[m][f]; }));
+    const have = held[id] || {};
+    const lines = Object.keys(want).map(f => ({ family: f, qty: want[f] - (have[f] || 0) })).filter(l => l.qty > 0);
+    return { site: s, models: models[id], lines: lines };
+  });
+}
+
+function logKitPlan_(plan, verb) {
+  const busy = plan.filter(p => p.lines.length);
+  busy.forEach(p => console.log(verb + ' ' + p.lines.reduce((n, l) => n + l.qty, 0) + ' item(s), ' + p.lines.length + ' part(s): ' +
+    p.site.Name + ' (' + p.site.SiteID + ', ' + p.models.join(', ') + ')'));
+  const items = busy.reduce((n, p) => n + p.lines.reduce((m, l) => m + l.qty, 0), 0);
+  console.log(verb + ' ' + items + ' item(s) at ' + busy.length + ' site(s). ' + (plan.length - busy.length) + ' kit site(s) already had a full kit.');
+}
+
 function runSampleData() {
   loadSampleData_();
   console.log('Sample data added. Test PINs: engineer 1111, admin 9999. Delete the sample rows before going live.');
