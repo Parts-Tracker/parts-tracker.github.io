@@ -347,6 +347,18 @@
   }
 
   // ---------- Bottom sheet ----------
+  // Phone keyboards cover the page without shrinking it, so keep the sheet sitting just above the keyboard
+  // (--kb) and no taller than the space left (--vvh); otherwise search results end up hidden behind it.
+  function fitToKeyboard() {
+    const vv = window.visualViewport; if (!vv) return;
+    const root = document.documentElement.style;
+    root.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)) + 'px');
+    root.setProperty('--vvh', Math.round(vv.height) + 'px');
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitToKeyboard);
+    window.visualViewport.addEventListener('scroll', fitToKeyboard);
+  }
   let sheetOnClose = null;
   function openSheet(title, content, onClose) {
     $('sheetTitle').textContent = title;
@@ -356,6 +368,7 @@
     $('sheet').classList.remove('hidden');
     $('sheetBackdrop').classList.remove('hidden');
     sheetOnClose = onClose || null;
+    fitToKeyboard();
     if (state.scanner) state.scanner.pause();
   }
   function closeSheet() {

@@ -266,6 +266,15 @@
     const siteSearch = $('sheetBody').querySelector('input');
     siteSearch.value = 'bradford'; siteSearch.dispatchEvent(new Event('input'));
     check('site list searches by town', $('sheetBody').querySelectorAll('.pick').length === 1);
+    // A 300px phone keyboard: the sheet must sit above it, not behind it
+    const vv = window.visualViewport, kbH = Math.min(300, innerHeight - 200);
+    Object.defineProperty(vv, 'height', { configurable: true, get: () => innerHeight - kbH });
+    Object.defineProperty(vv, 'offsetTop', { configurable: true, get: () => 0 });
+    vv.dispatchEvent(new Event('resize'));
+    const withKb = $('sheet').getBoundingClientRect();
+    check('sheet sits just above the keyboard and fits the space left', Math.abs(withKb.bottom - (innerHeight - kbH)) < 2 && withKb.top >= 0, [withKb.top, withKb.bottom, innerHeight, kbH]);
+    delete vv.height; delete vv.offsetTop; vv.dispatchEvent(new Event('resize'));
+    check('sheet back at the bottom when the keyboard closes', Math.abs($('sheet').getBoundingClientRect().bottom - innerHeight) < 2);
     $('sheetBody').querySelector('.pick').click();
     check('switched to the chosen site in the same tab', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Demo Graphics Ltd'), $('siteName').textContent);
     check('chosen site remembered for next time', JSON.parse(localStorage.getItem('pt_site')) === rows('Sites')[1].Token && !location.search.includes('s='));

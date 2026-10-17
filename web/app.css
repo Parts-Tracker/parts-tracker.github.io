@@ -146,7 +146,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 20; }
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; max-height: 85vh; overflow: auto; background: var(--surface); border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2); }
+.sheet { position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 21; max-height: calc(var(--vvh, 100vh) * 0.85); overflow: auto; background: var(--surface); border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2); }
 .sheet .big-name { font-size: 1.3rem; font-weight: 700; margin: 4px 0; }
 .sheet .big-code { font-family: var(--font-mono); font-size: 1.15rem; letter-spacing: 0.04em; }
 .sheet .buttons { display: grid; gap: 8px; margin-top: 14px; }
