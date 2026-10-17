@@ -695,7 +695,22 @@
     }
   }
 
-  function saveQueue() { store.set('pt_queue', state.queue); renderBanner(); }
+  function saveQueue() { store.set('pt_queue', state.queue); renderBanner(); mirrorOutbox(); }
+
+  /**
+   * Copies the records waiting to send to the outbox the service worker can read, and asks Chrome (Android)
+   * to send them in the background when signal returns, even if the app is closed. Records that need the
+   * engineer (sign in, an error) stay with the app.
+   */
+  let outboxWrite = Promise.resolve();
+  function mirrorOutbox() {
+    if (!window.PTOutbox || !window.indexedDB) return;
+    const waiting = state.queue.filter(q => !q.error).map(b => Object.assign({ action: 'submit', session: state.session }, b));
+    outboxWrite = outboxWrite.then(() => PTOutbox.save(CFG.apiUrl, waiting)).catch(() => {});
+    if (waiting.length && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready.then(reg => reg.sync && reg.sync.register(PTOutbox.TAG)).catch(() => {});
+    }
+  }
 
   /** Sends one queued batch. Keeps it queued if offline or if sign-in is needed. */
   const inFlight = new Set();

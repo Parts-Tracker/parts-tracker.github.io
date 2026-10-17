@@ -69,6 +69,8 @@
     await loadScript('https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js');
     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js');
     await loadScript('../web/scanner.js');
+    await loadScript('../web/outbox.js');
+    indexedDB.deleteDatabase('pt-outbox');
     await loadScript('../web/app.js');
     const $ = id => document.getElementById(id);
     const visible = id => !$(id).hidden;
@@ -176,9 +178,23 @@
     check('offline record shown in site stock straight away', (A.state.data.stock.find(s => s.family === 'P004E1900X') || {}).qty === 1);
     check('queue holds one record', A.state.queue.length === 1);
     const queued = JSON.parse(JSON.stringify(A.state.queue[0]));
+    // Background sync (Android): the waiting record is copied where the service worker can send it with the app closed
+    await sleep(150);
+    const box = await PTOutbox.list();
+    check('waiting record copied to the background-sync outbox', box.length === 1 && box[0].batchId === queued.batchId && box[0].action === 'submit' && box[0].session === A.state.session, box);
+    let bgErr = '';
+    try { await PTOutbox.send(() => Promise.reject(new Error('offline'))); } catch (e) { bgErr = e.message; }
+    check('background send with no signal fails (so Chrome retries) and keeps the record', /No signal/.test(bgErr) && (await PTOutbox.list()).length === 1, bgErr);
+    const viaBackend = async (url, opt) => ({ ok: true, json: async () => call(JSON.parse(opt.body)) });
+    const bg = await PTOutbox.send(viaBackend);
+    check('background send delivers it with the app closed', bg.sent === 1 && (await PTOutbox.list()).length === 0 && stockOf(site.SiteID, 'P004E1900X') === 1, bg);
+    const movesAfterBg = rows('Movements').length;
     apiDown = false;
     await A.syncQueue(true);
     check('queued record sent when back online', A.state.queue.length === 0 && stockOf(site.SiteID, 'P004E1900X') === 1);
+    check('the app sending it again after background sync is not recorded twice', rows('Movements').length === movesAfterBg);
+    await sleep(150);
+    check('outbox empty once the app has sent everything', (await PTOutbox.list()).length === 0);
     const before = rows('Movements').length;
     const dup = call(Object.assign({ action: 'submit' }, queued));
     check('a resent record is ignored', dup.ok && dup.duplicate && rows('Movements').length === before, dup);

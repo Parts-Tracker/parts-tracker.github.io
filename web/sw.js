@@ -1,8 +1,9 @@
 /* Offline support: keeps the app files on the phone. Data requests always go to the network.
    App files are fetched fresh when there is signal (falling back to the saved copy offline or after 4 s),
    so updates reach phones straight away; the third-party libraries are versioned and served from the copy. */
-const CACHE = 'pt-v31';
-const APP_FILES = ['./', 'index.html', 'app.css', 'config.js', 'codes.js', 'scanner.js', 'app.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'pt-v32';
+const APP_FILES = ['./', 'index.html', 'app.css', 'config.js', 'codes.js', 'scanner.js', 'outbox.js', 'app.js', 'icon.svg', 'manifest.webmanifest'];
+importScripts('outbox.js');
 const LIBS = [
   'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js'
@@ -46,3 +47,9 @@ async function networkFirst(req) {
   const saved = await cache.match(req, { ignoreSearch: true });
   return saved || fresh;
 }
+
+// Background sync (Chrome on Android): Chrome wakes this worker when signal returns, even with the app closed,
+// and it sends the records waiting in the outbox. If there is still no signal it fails, so Chrome tries again later.
+self.addEventListener('sync', e => {
+  if (e.tag === PTOutbox.TAG) e.waitUntil(PTOutbox.send(fetch));
+});
