@@ -259,11 +259,24 @@
     registerServiceWorker();
     window.addEventListener('online', () => { state.offline = false; syncQueue(); if (state.site) loadSite(); });
     setInterval(() => syncQueue(), 60000);
+    await route(params);
+    syncQueue();
+  }
+
+  /** Where the app opens: ?admin, ?van (link or home-screen shortcut), a site's QR code, or the last site used. */
+  async function route(params) {
+    const fromQr = params.get('s');
     if (params.has('admin')) return openAdmin();
     state.site = fromQr || store.get('pt_site', null);
+    if (params.has('van') && !fromQr) {
+      // Straight to My van; the last site still loads behind it so the Site tab works as usual
+      if (!isEngineer()) show('view-nosite');   // under the PIN pad, in case they cancel
+      openVan();
+      if (state.site) await loadSite();
+      return;
+    }
     if (!state.site) { if (isEngineer()) openVan(); else show('view-nosite'); return; }
     await loadSite();
-    syncQueue();
   }
 
   // Views that give way to the site's home page once it has loaded
@@ -1821,7 +1834,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite, openFind };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite, openFind, route };
 
   init();
 })();

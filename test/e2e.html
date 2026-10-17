@@ -843,6 +843,14 @@
     await sleep(50);
     document.querySelector('#whereSwitch [data-where=van]').click();
     check('My van opens after archiving, for whoever is signed in', await waitFor(() => visible('view-van') && $('vanName').textContent === A.state.user.name), [visible('view-van'), $('vanName').textContent, $('whereSwitch').hidden, document.querySelector('#whereSwitch [data-where=van]').disabled]);
+    // The ?van link (and the home-screen shortcut) opens My van straight away, wherever the app was
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    await waitFor(() => visible('view-home'));
+    await A.route(new URLSearchParams('van'));
+    check('the ?van link opens My van straight away, with the site still there behind it', await waitFor(() => visible('view-van')) && !document.querySelector('#whereSwitch [data-where=site]').disabled);
+    const manifest = await (await fetch('../web/manifest.webmanifest')).json();
+    check('the home-screen icon has a My van shortcut', (manifest.shortcuts || []).some(s => s.url === './?van' && s.name === 'My van'));
+
     // Easter egg: everything falls off My van, then it is all put back exactly as it was
     window.PT_EGG_SPEED = 0.02;
     await waitFor(() => $('vanUpdating').hidden && !/Loading/.test($('vanSummary').textContent));

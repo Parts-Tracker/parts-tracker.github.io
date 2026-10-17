@@ -5,5 +5,27 @@
   "display": "standalone",
   "background_color": "#EBEBEB",
   "theme_color": "#FFFFFF",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My van",
+      "short_name": "My van",
+      "description": "Your van stock and van kit",
+      "url": "./?van",
+      "icons": [
+        {
+          "src": "icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ]
 }
