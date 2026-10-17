@@ -987,6 +987,85 @@
     else show('view-nosite');
   }
 
+  // ---------- Easter egg: "Do not press" at the bottom of My van ----------
+  // Every letter and number falls off the screen, the cards swing off their hinges, a message, then it is all put
+  // back exactly as it was (only text nodes are wrapped and unwrapped, so nothing else on the page is touched).
+  const EGG_LINES = [
+    ['Well… you were told.', 'Putting everything back…'],
+    ['Again? Really?', 'The parts are fine. Your pride may not be.'],
+    ['This is a parts tracker, not a toy.', 'Fine. One more go.'],
+    ['OK, that one was quite good.', 'Back to work now.']
+  ];
+  let eggPresses = 0;
+  function doNotPress() {
+    if (document.body.classList.contains('falling')) return;
+    const line = EGG_LINES[Math.min(eggPresses, EGG_LINES.length - 1)];
+    eggPresses++;
+    try { if (navigator.vibrate) navigator.vibrate([60, 40, 60, 40, 200]); } catch (e) {}
+    const done = () => { $('doNotPress').textContent = eggPresses === 1 ? 'I said do NOT press' : 'Do not press. Seriously.'; };
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      $('doNotPress').classList.add('egg-shake');
+      setTimeout(() => $('doNotPress').classList.remove('egg-shake'), 600);
+      toast(line[0]); done(); return;
+    }
+    const speed = window.PT_EGG_SPEED || 1;   // tests run it faster
+    const ms = n => Math.round(n * speed);
+    const roots = [document.querySelector('.topbar'), $('banner'), $('whereSwitch'), $('view-van')].filter(Boolean);
+    const rand = (a, b) => a + Math.random() * (b - a);
+    // 1. Wrap every visible letter in its own span, words kept whole so nothing reflows
+    const wrapped = [];
+    roots.forEach(root => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: n => n.nodeValue.trim() && !n.parentElement.closest('svg, script, style, [hidden]') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(node => {
+        const holder = document.createElement('span');
+        node.nodeValue.split(/(\s+)/).forEach(part => {
+          if (!part) return;
+          if (/^\s+$/.test(part)) { holder.append(part); return; }
+          const word = el('span', { class: 'fall-word' });
+          [...part].forEach(ch => {
+            const c = el('span', { class: 'fall-char' }, ch);
+            c.style.setProperty('--t', ms(rand(900, 1700)) + 'ms');
+            c.style.setProperty('--d', ms(rand(0, 1400)) + 'ms');
+            c.style.setProperty('--x', Math.round(rand(-60, 60)) + 'px');
+            c.style.setProperty('--r', Math.round(rand(-540, 540)) + 'deg');
+            word.append(c);
+          });
+          holder.append(word);
+        });
+        node.replaceWith(holder);
+        wrapped.push([holder, node]);
+      });
+    });
+    document.body.classList.add('falling');
+    document.documentElement.classList.add('egg');
+    // 2. Then the cards and buttons swing off their hinges
+    const boxes = [...document.querySelectorAll('#view-van .hero, #view-van .action, #view-van .card, #whereSwitch, .do-not-press-row')];
+    const hinge = setTimeout(() => boxes.forEach(b => {
+      b.style.setProperty('--t', ms(rand(1100, 1600)) + 'ms');
+      b.style.setProperty('--d', ms(rand(0, 500)) + 'ms');
+      b.style.setProperty('--r', (Math.random() < 0.5 ? -1 : 1) * Math.round(rand(12, 28)) + 'deg');
+      b.classList.add('fall-box');
+    }), ms(1600));
+    // 3. The message, then put it all back
+    const message = el('div', { class: 'egg-message' }, el('strong', {}, line[0]), el('span', {}, line[1]));
+    const show = setTimeout(() => document.body.append(message), ms(3300));
+    setTimeout(() => {
+      clearTimeout(hinge); clearTimeout(show);
+      message.remove();
+      boxes.forEach(b => { b.classList.remove('fall-box'); ['--t', '--d', '--r'].forEach(p => b.style.removeProperty(p)); if (!b.getAttribute('style')) b.removeAttribute('style'); });
+      wrapped.forEach(([holder, node]) => holder.replaceWith(node));
+      document.body.classList.remove('falling');
+      document.documentElement.classList.remove('egg');
+      window.scrollTo(0, 0);
+      done();
+      toast('Phew. All put back.');
+    }, ms(5600));
+  }
+
   // ---------- Find a part (engineers): which engineers' vans and which sites hold it ----------
   // The answer is saved on the phone, so it opens straight away and works with no signal (marked with its age).
   async function openFind() {
@@ -1660,6 +1739,7 @@
     $('nositeVan').addEventListener('click', openVan);
     $('nositeChoose').addEventListener('click', chooseSite);
     $('findPart').addEventListener('click', openFind);
+    $('doNotPress').addEventListener('click', doNotPress);
     $('surplusCopy').addEventListener('click', copySurplus);
     $('vanFindPart').addEventListener('click', openFind);
     $('recountGo').addEventListener('click', () => startMode('COUNT'));

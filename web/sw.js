@@ -1,7 +1,7 @@
 /* Offline support: keeps the app files on the phone. Data requests always go to the network.
    App files are fetched fresh when there is signal (falling back to the saved copy offline or after 4 s),
    so updates reach phones straight away; the third-party libraries are versioned and served from the copy. */
-const CACHE = 'pt-v37';
+const CACHE = 'pt-v38';
 const APP_FILES = ['./', 'index.html', 'app.css', 'config.js', 'codes.js', 'scanner.js', 'outbox.js', 'app.js', 'icon.svg', 'manifest.webmanifest'];
 importScripts('outbox.js');
 const LIBS = [

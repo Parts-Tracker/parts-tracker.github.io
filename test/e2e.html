@@ -843,6 +843,20 @@
     await sleep(50);
     document.querySelector('#whereSwitch [data-where=van]').click();
     check('My van opens after archiving, for whoever is signed in', await waitFor(() => visible('view-van') && $('vanName').textContent === A.state.user.name), [visible('view-van'), $('vanName').textContent, $('whereSwitch').hidden, document.querySelector('#whereSwitch [data-where=van]').disabled]);
+    // Easter egg: everything falls off My van, then it is all put back exactly as it was
+    window.PT_EGG_SPEED = 0.02;
+    await waitFor(() => $('vanUpdating').hidden && !/Loading/.test($('vanSummary').textContent));
+    const vanBefore = $('view-van').innerHTML, topBefore = document.querySelector('.topbar').textContent;
+    $('doNotPress').click();
+    check('Do not press: the letters are wrapped to fall and taps are blocked', document.body.classList.contains('falling') && $('view-van').querySelectorAll('.fall-char').length > 50);
+    check('Do not press: the cards swing off, then a message', await waitFor(() => document.querySelector('.fall-box')) && await waitFor(() => /you were told/.test((document.querySelector('.egg-message') || {}).textContent || '')));
+    check('Do not press: everything is put back exactly as it was', await waitFor(() => !document.body.classList.contains('falling')) && !document.documentElement.classList.contains('egg') && !document.querySelector('.fall-char, .fall-box, .egg-message') &&
+      $('view-van').innerHTML.replace('I said do NOT press', 'Do not press') === vanBefore && document.querySelector('.topbar').textContent === topBefore && $('doNotPress').textContent === 'I said do NOT press',
+      (() => { const a = $('view-van').innerHTML.replace('I said do NOT press', 'Do not press'); let i = 0; while (i < a.length && a[i] === vanBefore[i]) i++; return [a.slice(i - 60, i + 80), vanBefore.slice(i - 60, i + 80)]; })());
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    check('the app still works after the easter egg', await waitFor(() => visible('view-home')));
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    await waitFor(() => visible('view-van'));
     check('archive spreadsheet holds no carried-forward lines', archived.getDataRange().getValues().slice(1).every(r => !r.includes('CARRIED_FORWARD')));
   } catch (e) {
     check('test run crashed', false, String(e && e.stack || e));

@@ -319,3 +319,31 @@ h1 .updating { vertical-align: middle; }
 #surplusSoonBox summary { cursor: pointer; font-weight: 700; }
 #surplusSoonBox[open] summary { margin-bottom: 6px; }
 .surplus-site .part-head { cursor: pointer; }
+
+/* Easter egg: the "Do not press" button at the bottom of My van. Letters fall off the screen, then the cards
+   swing off their hinges, then everything is put back. Purely visual. */
+.do-not-press-row { text-align: center; margin: 28px 0 8px; }
+.do-not-press { min-height: 40px; padding: 8px 18px; border: 2px solid #E0356C; color: #E0356C; background: transparent; font-weight: 700; border-radius: 999px; letter-spacing: 0.02em; }
+/* Clip to the screen while things fall, so swinging cards never make the page wider (phones would then re-centre on it) */
+html.egg, html.egg body { overflow: clip; }
+body.falling, body.falling * { pointer-events: none; }
+.fall-word { white-space: nowrap; }
+.fall-char { display: inline-block; animation: pt-fall var(--t) cubic-bezier(0.55, 0, 1, 0.45) var(--d) forwards; }
+@keyframes pt-fall {
+  0% { transform: translate(0, 0) rotate(0); }
+  12% { transform: translate(calc(var(--x) * 0.05), -5px) rotate(calc(var(--r) * 0.08)); }
+  100% { transform: translate(var(--x), 115vh) rotate(var(--r)); }
+}
+.fall-box { transform-origin: 8% 0; animation: pt-hinge var(--t) ease-in var(--d) forwards; }
+@keyframes pt-hinge {
+  0% { transform: rotate(0); }
+  25% { transform: rotate(var(--r)); }
+  35% { transform: rotate(calc(var(--r) * 0.8)); }
+  100% { transform: translate(0, 120vh) rotate(calc(var(--r) * 1.6)); }
+}
+.egg-message { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; pointer-events: none; }
+.egg-message strong { font-size: 1.9rem; line-height: 1.2; color: var(--text); animation: pt-pop 0.35s ease-out both; }
+.egg-message span { color: var(--text-muted); animation: pt-pop 0.35s ease-out 0.4s both; }
+@keyframes pt-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.egg-shake { animation: pt-shake 0.5s; }
+@keyframes pt-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
