@@ -91,7 +91,7 @@ function previewKitStock() {
 }
 
 /**
- * Gives every open site a full Up Time Kit for each machine model on the Kits tab (two SC180s = one kit;
+ * Gives every open site a full Up Time Kit for each kit machine it has (two SC180s = two kits;
  * machines ticked No kit on the Printers tab are left out),
  * assuming it is all there until an engineer counts it on site. Parts already held are topped up, not doubled,
  * so running it again adds nothing. Recorded as BOOK_IN, which the daily kit email ignores.
@@ -113,21 +113,22 @@ function fillKitStock() {
 /** For each open site: the kit parts it should hold and how many to add to reach a full kit. */
 function kitTopUp_() {
   const kits = kitsByModel_();
-  const models = {};
+  const machines = {};   // site -> { MODEL: how many kit machines }
   readTable_('Printers').forEach(p => {
     if (noKit_(p)) return;   // marked No kit on the Printers tab, e.g. a training machine
     const m = cleanModel_(p.Model), id = String(p.SiteID);
-    const list = models[id] = models[id] || [];
-    if (m && kits[m] && list.indexOf(m) < 0) list.push(m);
+    if (!m || !kits[m]) return;
+    const at = machines[id] = machines[id] || {};
+    at[m] = (at[m] || 0) + 1;   // each machine has its own kit
   });
   const held = {};
   movementColumns_().forEach(m => { const h = held[m.site] = held[m.site] || {}; h[m.family] = (h[m.family] || 0) + m.qty; });
-  return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && (models[String(s.SiteID)] || []).length).map(s => {
-    const id = String(s.SiteID), want = {};
-    models[id].forEach(m => Object.keys(kits[m]).forEach(f => { want[f] = (want[f] || 0) + kits[m][f]; }));
+  return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && machines[String(s.SiteID)]).map(s => {
+    const id = String(s.SiteID), want = {}, at = machines[id];
+    Object.keys(at).forEach(m => Object.keys(kits[m]).forEach(f => { want[f] = (want[f] || 0) + kits[m][f] * at[m]; }));
     const have = held[id] || {};
     const lines = Object.keys(want).map(f => ({ family: f, qty: want[f] - (have[f] || 0) })).filter(l => l.qty > 0);
-    return { site: s, models: models[id], lines: lines };
+    return { site: s, models: Object.keys(at).map(m => at[m] > 1 ? at[m] + ' x ' + m : m), lines: lines };
   });
 }
 

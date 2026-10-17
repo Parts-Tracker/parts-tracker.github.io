@@ -286,7 +286,7 @@
   // ---------- Sign in ----------
   function signOut(quiet) {
     state.session = null; state.user = null;
-    store.del('pt_session'); store.del('pt_user');
+    store.del('pt_session'); store.del('pt_user'); store.del('pt_admin');
     renderUserChip(); renderHome();
     if (state.where === 'van') { state.where = 'site'; goHome(); }
     else renderWhereSwitch(state.view);
@@ -1013,20 +1013,27 @@
     $('siteName').textContent = 'Admin';
     show('view-admin');
     if (!state.user || !/admin/i.test(state.user.role)) { askPin(loadAdmin, 'Admin sign in'); return; }
+    // Show the copy saved on this phone straight away, then bring it up to date
+    const saved = store.get('pt_admin', null);
+    if (saved && !admin.data) applyAdmin(saved, true);
     loadAdmin();
   }
 
   async function loadAdmin() {
-    $('adminSummary').textContent = 'Loading…';
+    $('adminSummary').textContent = admin.data ? 'Updating…' : 'Loading…';
     try {
       const r = await api({ action: 'admin', session: state.session });
       if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session' || r.code === 'forbidden') askPin(loadAdmin, 'Admin sign in'); return; }
       applyAdmin(r);
-    } catch (e) { $('adminSummary').textContent = e.code === 'offline' ? 'No connection. The dashboard needs signal.' : e.message; }
+    } catch (e) {
+      $('adminSummary').textContent = e.code === 'offline'
+        ? (admin.data ? 'No connection: showing the copy saved on this phone.' : 'No connection. The dashboard needs signal.') : e.message;
+    }
   }
 
   /** Takes in a full set of dashboard data (from loading, or returned by a change) and redraws. */
-  function applyAdmin(r) {
+  function applyAdmin(r, fromSaved) {
+      if (!fromSaved) { const keep = Object.assign({}, r); delete keep.ok; store.set('pt_admin', keep); }
       // Older backends send fewer details per site; fill the gaps so the dashboard still works
       r.sites = (r.sites || []).map(s => Object.assign({ town: '', postcode: '', printers: [], machines: [], lastActivity: '', items: 0, active: true }, s));
       admin.data = r;
@@ -1039,7 +1046,7 @@
         admin.bySite[si].push({ family, qty });
       });
       admin.qrBuilt = false;
-      $('adminSummary').textContent = r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
+      $('adminSummary').textContent = fromSaved ? 'Updating…' : r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
       renderAdminStats();
       renderPartResults();
       renderSites();

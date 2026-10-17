@@ -562,6 +562,14 @@
       call({ action: 'bootstrap', site: newSite.Token }).code === 'bad_site' && stockOf('S1001', 'P059K6158X') === expectMove);
     check('closed site greyed at the bottom, out of the counts and QR codes', await waitFor(() => /CLOSED/.test($('siteDetailHead').textContent)) && $('adminStats').querySelector('.stat-value').textContent === '2' &&
       (() => { $('siteBack').click(); const li = [...$('siteList').querySelectorAll('li')]; return li[li.length - 1].classList.contains('closed') && /closed/.test($('siteCount').textContent); })());
+    // The dashboard is saved on the phone, so it opens straight away (and with no signal) next time
+    check('admin dashboard saved on the phone', (JSON.parse(localStorage.getItem('pt_admin')) || { sites: [] }).sites.length >= 2);
+    A.admin.data = null; apiDown = true;
+    A.openAdmin();
+    check('admin opens from the saved copy with no connection', await waitFor(() => /showing the copy saved/.test($('adminSummary').textContent)) && $('adminStats').querySelector('.stat-value').textContent === '2', $('adminSummary').textContent);
+    apiDown = false;
+    A.openAdmin();
+    await waitFor(() => $('adminSummary').textContent === '');
     [...$('siteList').querySelectorAll('li')].find(li => /New Print Ltd/.test(li.textContent)).click();
     $('siteClose').click();
     sheetBtn('Reopen site').click();
@@ -577,8 +585,8 @@
     // ---- Fill every kit site with an assumed full kit ----
     const kitModels = kitsByModel_();
     const kitSites = rows('Sites').filter(s => isTrue_(s.Active) && rows('Printers').some(p => String(p.SiteID) === String(s.SiteID) && kitModels[cleanModel_(p.Model)]));
-    const fullKit = s => { const want = {}; [...new Set(rows('Printers').filter(p => String(p.SiteID) === String(s.SiteID)).map(p => cleanModel_(p.Model)))]
-      .filter(m => kitModels[m]).forEach(m => Object.keys(kitModels[m]).forEach(f => { want[f] = (want[f] || 0) + kitModels[m][f]; })); return want; };
+    const fullKit = s => { const want = {}; rows('Printers').filter(p => String(p.SiteID) === String(s.SiteID) && !noKit_(p)).map(p => cleanModel_(p.Model))
+      .filter(m => kitModels[m]).forEach(m => Object.keys(kitModels[m]).forEach(f => { want[f] = (want[f] || 0) + kitModels[m][f]; })); return want; };   // one kit per machine
     rows('Sites').filter(s => s.SiteID === 'S1001').forEach(s => SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getRange(s._row, col_('Sites', 'Active')).setValue(false));
     appendObjects_('Sites', [{ SiteID: 'S1999', Name: 'Training Centre', Address: 'Leeds', Postcode: 'LS1 1AA', Token: 'trainingtoken', Active: true }]);
     appendObjects_('Printers', [{ SiteID: 'S1999', Model: 'PC1120', Serial: 'TRAIN-1', NoKit: true }]);
@@ -590,6 +598,8 @@
     sendDailyKitReport(); mail.length = 0;
     fillKitStock();
     check('every open kit site now holds at least a full kit', kitSites.length > 0 && kitSites.filter(s => s.SiteID !== 'S1001').every(s => { const st = stockBySite_(s.SiteID), w = fullKit(s); return Object.keys(w).every(f => (st[f] || 0) >= w[f]); }));
+    const twoSc = kitSites.find(s => rows('Printers').filter(p => String(p.SiteID) === String(s.SiteID) && cleanModel_(p.Model) === 'SC180').length === 2);
+    check('a site with two SC180s gets two small kits', twoSc && stockBySite_(twoSc.SiteID)['P859K4874X'] >= 2 + (rows('Printers').some(p => String(p.SiteID) === String(twoSc.SiteID) && cleanModel_(p.Model) === 'EC1100') ? 1 : 0), twoSc && stockBySite_(twoSc.SiteID));
     check('assumed kit stock is a BOOK_IN marked not yet checked', rows('Movements').slice(movesBefore).length > 0 && rows('Movements').slice(movesBefore).every(m => m.Type === 'BOOK_IN' && /not yet checked/.test(m.Note) && m.Qty > 0));
     check('closed sites get no kit', JSON.stringify(stockBySite_('S1001')) === closedBefore);
     check('a machine ticked No kit gets no kit', Object.keys(stockBySite_('S1999')).length === 0);
