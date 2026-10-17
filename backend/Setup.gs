@@ -13,8 +13,6 @@ function onOpen() {
     .addItem('Set up sheets', 'menuSetup')
     .addItem('Give sites IDs and QR tokens', 'menuSiteTokens')
     .addItem('Secure new PINs', 'menuHashPins')
-    .addSeparator()
-    .addItem('Load sample data (testing only)', 'menuSampleData')
     .addToUi();
 }
 
@@ -34,13 +32,6 @@ function menuHashPins() {
   const n = hashPendingPins_();
   const dupes = duplicatePins_();
   SpreadsheetApp.getUi().alert(n + ' PIN(s) secured.' + (dupes.length ? '\n\nWarning: these people share a PIN and cannot sign in until one is changed: ' + dupes.join(', ') : ''));
-}
-
-function menuSampleData() {
-  const ui = SpreadsheetApp.getUi();
-  if (ui.alert('Add sample sites, users and parts for testing?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
-  loadSampleData_();
-  ui.alert('Sample data added. Test PINs: engineer 1111, admin 9999.\nDelete the sample rows before going live.');
 }
 
 // ---- The same tasks, for a separate Apps Script project (no menu in the Sheet).
@@ -121,8 +112,7 @@ function kitTopUp_() {
     const at = machines[id] = machines[id] || {};
     at[m] = (at[m] || 0) + 1;   // each machine has its own kit
   });
-  const held = {};
-  movementColumns_().forEach(m => { const h = held[m.site] = held[m.site] || {}; h[m.family] = (h[m.family] || 0) + m.qty; });
+  const held = stockAll_();
   return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && machines[String(s.SiteID)]).map(s => {
     const id = String(s.SiteID), want = {}, at = machines[id];
     Object.keys(at).forEach(m => Object.keys(kits[m]).forEach(f => { want[f] = (want[f] || 0) + kits[m][f] * at[m]; }));
@@ -240,11 +230,10 @@ function logArchivePlan_(p) {
     ' carried-forward line(s). The Movements tab goes from ' + p.total + ' to ' + (p.carried.length + p.keep.length) + ' row(s). Stock stays the same.');
 }
 
-/** Total stock for every site/van and part, keyed "site|part". */
+/** Every non-zero stock level, keyed "site|part", for checking nothing changed. */
 function stockTotals_() {
-  const out = {};
-  movementColumns_().forEach(m => { const k = m.site + '|' + m.family; out[k] = (out[k] || 0) + m.qty; });
-  Object.keys(out).forEach(k => { if (!out[k]) delete out[k]; });
+  const all = stockAll_(), out = {};
+  Object.keys(all).forEach(site => Object.keys(all[site]).forEach(f => { if (all[site][f]) out[site + '|' + f] = all[site][f]; }));
   return out;
 }
 
@@ -257,25 +246,6 @@ function archiveBook_() {
   if (row) sheet_('Settings').getRange(row._row, col_('Settings', 'Value')).setValue(book.getUrl());
   else appendObjects_('Settings', [{ Setting: 'ArchiveSheet', Value: book.getUrl(), Notes: 'The archive spreadsheet.' }]);
   return book;
-}
-
-/** Builds every active engineer's My van data as the app would, and logs any error. For fault finding. */
-function checkVans() {
-  readTable_('Users').filter(u => isTrue_(u.Active) && /^(engineer|admin)$/i.test(String(u.Role))).forEach(u => {
-    try {
-      const v = vanData_(u, '');
-      const text = JSON.stringify(v);
-      console.log('OK ' + u.UserID + ' ' + u.Name + ': ' + v.stock.length + ' stock line(s), ' + v.recent.length + ' recent, ' + v.kit.length + ' kit part(s), ' +
-        Math.round(text.length / 1024) + ' KB. Recent types: ' + v.recent.map(r => r.type + (r.at ? '' : ' (no time)')).join(', '));
-    } catch (e) {
-      console.log('ERROR ' + u.UserID + ' ' + u.Name + ': ' + (e && e.stack || e));
-    }
-  });
-}
-
-function runSampleData() {
-  loadSampleData_();
-  console.log('Sample data added. Test PINs: engineer 1111, admin 9999. Delete the sample rows before going live.');
 }
 
 function runSiteTokens() {
@@ -305,10 +275,7 @@ function setupSheets_() {
       sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
       sh.setFrozenRows(1);
     } else {
-      // Tabs made by an older version: rename "Family" to "Part Number", then add any new columns
-      // at the end, leaving existing data alone
-      const first = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
-      first.forEach((h, j) => { if (h === 'Family') sh.getRange(1, j + 1).setValue('Part Number'); });
+      // Add any new columns at the end, leaving existing data alone
       const have = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => key_(String(h)));
       head.filter(h => have.indexOf(key_(h)) < 0).forEach(h => {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold');
@@ -363,15 +330,7 @@ function protectMovements_() {
 
 /** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */
 function addMissingSettings_() {
-  const existing = readTable_('Settings');
-  const col = col_('Settings', 'Value');
-  existing.forEach(r => {
-    const k = String(r.Setting).trim();
-    if ((SETTINGS_OLD_DEFAULTS[k] || []).indexOf(String(r.Value)) >= 0) {
-      sheet_('Settings').getRange(r._row, col).setValue(SETTINGS_DEFAULTS.find(d => d[0] === k)[1]);
-    }
-  });
-  const have = existing.map(r => String(r.Setting).trim());
+  const have = readTable_('Settings').map(r => String(r.Setting).trim());
   const rows = SETTINGS_DEFAULTS.filter(d => have.indexOf(d[0]) < 0).map(d => ({ Setting: d[0], Value: d[1], Notes: d[2] }));
   appendObjects_('Settings', rows);
 }
@@ -402,31 +361,4 @@ function duplicatePins_() {
     else seen[u.PinHash] = u.Name;
   });
   return dupes;
-}
-
-/** Sample rows for trying the app. Real data replaces these. */
-function loadSampleData_() {
-  setupSheets_();
-  appendObjects_('Sites', [
-    { Name: 'Sample Print Co', Address: '1 Test Street, Leeds', Postcode: 'LS1 1AA', Active: true },
-    { Name: 'Demo Graphics Ltd', Address: '2 Demo Road, Bradford', Postcode: 'BD1 1AA', Active: true }
-  ]);
-  ensureSiteTokens_();
-  const sites = readTable_('Sites');
-  const id = name => (sites.find(s => s.Name === name) || {}).SiteID;
-  appendObjects_('Printers', [
-    { SiteID: id('Sample Print Co'), Model: 'PC1120', Serial: '' },
-    { SiteID: id('Demo Graphics Ltd'), Model: 'SC180', Serial: '' }
-  ]);
-  appendObjects_('Users', [
-    { UserID: 'E01', Name: 'Test Engineer', Role: 'engineer', PIN: '1111', Active: true },
-    { UserID: 'A01', Name: 'Test Admin', Role: 'admin', PIN: '9999', Active: true }
-  ]);
-  hashPendingPins_();
-  const now = new Date();
-  appendObjects_('Parts', [
-    ['P059K6158X', 'Tray 1/2 Feed Roll'], ['P059K5813X', 'Tray 1/2 Feed Roll - Nudger'], ['P053K9189X', 'Filter'],
-    ['P807E5651X', 'IBT Drive Gear (56T)'], ['P019E7597X', 'Finger Strip PR'], ['P127K5896X', 'Fusing Web Motor'],
-    ['P004E1900X', 'Deburr Cushion Tape'], ['P059K5556X', 'Pinch Roll'], ['P023E2950X', 'Decurler Belt']
-  ].map(p => ({ Family: p[0], Name: p[1], ExactCodes: '', Reviewed: true, AddedBy: 'Sample', AddedAt: now })));
 }

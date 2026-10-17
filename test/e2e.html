@@ -3,6 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Parts Tracker E2E</title></head>
 <body>
 <script src="gas-stubs.js"></script>
+<script src="sample-data.js"></script>
 <script>
 /* End-to-end test: the real backend (Code.gs, Setup.gs) on in-memory sheets, driven through the real phone app.
    Serve the app folder over http and open test/e2e.html; results land in window.__result. */
@@ -38,11 +39,7 @@
     check('sample data has 2 sites with tokens', rows('Sites').length === 2 && rows('Sites').every(s => String(s.Token).length === 32));
     check('PINs stored hashed, plain PIN cleared', rows('Users').every(u => u.PinHash && !u.PIN));
     check('part code column is called Part Number', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').getRange(1, 1).getValue() === 'Part Number');
-    const partsTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts');
-    partsTab.getRange(1, 1).setValue('Family');   // a Sheet made before the rename
-    check('old "Family" heading is still read', rows('Parts').length === 11 && rows('Parts').every(p => /^P/.test(p.Family)));
-    runSetup();
-    check('setup renames "Family" to "Part Number"', partsTab.getRange(1, 1).getValue() === 'Part Number' && rows('Parts').length === 11 && !partsTab.getRange(1, 8).getValue());
+    check('the sample-data loader is not in the backend', typeof runSampleData === 'undefined' && typeof menuSampleData === 'undefined' && !/sample/i.test(onOpen.toString()));
     check('Sites tab has no Contact or Phone columns', !SHEETS.Sites.includes('Contact') && !SHEETS.Sites.includes('Phone') && !Object.keys(rows('Sites')[0]).some(k => k === 'Contact' || k === 'Phone'));
     // Columns can be moved in the Sheet: reverse Sites, Users and Movements, and everything after this must still work
     ['Sites', 'Users', 'Movements'].forEach(n => {
@@ -423,11 +420,10 @@
     kt.data.splice(tRow._row - 1, 1);
     check('setup adds the small-kit parts and default settings', rows('Parts').some(p => p.Family === 'P859K4874X' && p.Name === '2nd BTR Assembly') && rows('Settings').some(r => r.Setting === 'OrderFormUrl' && /397ec25e/.test(r.Value)));
     const setRow = k => rows('Settings').find(r => r.Setting === k);
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('PartsReason')._row, 2).setValue('CAR STOCK');   // first version's value
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(17);              // a value the user chose
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(17);   // a value the user chose
     runSetup();
     check('setup run again adds nothing twice', rows('Kits').length === kitRows.length && rows('Settings').length === SETTINGS_DEFAULTS.length);
-    check('setup updates the old Parts Reason but keeps chosen values', setRow('PartsReason').Value === 'UPTIME KIT' && setRow('ReportHour').Value === 17);
+    check('setup keeps values the user chose', setRow('ReportHour').Value === 17);
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(setRow('ReportHour')._row, 2).setValue(18);
     appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P059K6158X', Qty: 2 }]);
     const a01 = rows('Users').find(u => u.UserID === 'A01');
@@ -706,7 +702,6 @@
       JSON.stringify(stockTotals_()) === stockBeforeArchive && rows('Movements').every(m => m.Type === 'CARRIED_FORWARD'), archived.getLastRow() - archivedCount);
     // My van still opens once the van's history has been archived
     const vanAfterArchive = call({ action: 'van', session: A.state.session });
-    checkVans();
     check('van loads after its history is archived', vanAfterArchive.ok && Array.isArray(vanAfterArchive.stock), 'ok=' + vanAfterArchive.ok + ' err=' + vanAfterArchive.error + ' code=' + vanAfterArchive.code + ' stock=' + (vanAfterArchive.stock || []).length + ' session=' + !!A.state.session);
     $('doneHome') && $('doneHome').click();
     document.querySelector('#whereSwitch [data-where=site]').click();

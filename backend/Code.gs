@@ -93,11 +93,12 @@ function actionBootstrap(req) {
   const site = siteFromToken_(req.site);
   const parts = readTable_('Parts');
   const names = partNames_(parts);
+  const moves = movementsAt_(site.SiteID);
   const out = {
     site: { id: site.SiteID, name: site.Name, address: site.Address, postcode: site.Postcode, lastCount: iso_(site.LastCount) },
     printers: readTable_('Printers').filter(p => String(p.SiteID) === String(site.SiteID)).map(p => p.Model),
-    stock: stockList_(site.SiteID, names),
-    recent: recentMovements_(site.SiteID, names, 10),
+    stock: stockLines_(sumStock_(moves), names),
+    recent: recentMovements_(moves, names, 10),
     partsVersion: partsVersion_(parts)
   };
   if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
@@ -167,7 +168,7 @@ function actionSubmit(req) {
   try {
     // The phone retries batches it could not confirm, so ignore one already recorded
     if (batchSeen_(batchId)) {
-      return { duplicate: true, stock: stockList_(locId, partNames_(readTable_('Parts'))) };
+      return { duplicate: true, stock: stockLines_(stockBySite_(locId), partNames_(readTable_('Parts'))) };
     }
 
     // Normalise codes and add any new parts to the catalogue (marked unreviewed)
@@ -201,7 +202,8 @@ function actionSubmit(req) {
       Qty: qty, Type: type, JobNo: jobNo, By: by, Role: role, Device: device, Note: rowNote || note, BatchID: batchId
     });
 
-    const current = stockBySite_(locId);
+    const before = stockBySite_(locId);
+    const current = Object.assign({}, before);
     const warnings = [];
     if (type === 'COUNT') {
       // Counted lines set the quantity; families in `zero` are set to 0. Only differences are written.
@@ -232,8 +234,10 @@ function actionSubmit(req) {
     if (rows.length) appendObjects_('Movements', rows);
     rememberBatch_(batchId);
 
-    const names = partNames_(readTable_('Parts'));
-    return { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, stock: stockList_(locId, names) };
+    // Stock now: what was there plus the rows just written (no second read of the Movements tab)
+    const after = Object.assign({}, before);
+    rows.forEach(r => { after[r.Family] = (after[r.Family] || 0) + r.Qty; });
+    return { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, stock: stockLines_(after, partNames_(parts.concat(newParts))) };
   } finally {
     lock.releaseLock();
   }
@@ -273,23 +277,20 @@ function vanKit_() {
 function actionVan(req) {
   const user = sessionUser_(req.session, false);
   if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
-  return vanData_(user, req.partsVersion);
-}
-
-function vanData_(user, partsVersion) {
   const loc = vanId_(user);
   const parts = readTable_('Parts');
   const names = partNames_(parts);
+  const moves = movementsAt_(loc);
   const out = {
     van: { id: loc, name: user.Name },
     orderDetails: { name: user.Name, email: user.Email || '', postcode: user.Postcode || '', byBox: user.ByBox || '' },
-    stock: stockList_(loc, names),
-    recent: recentMovements_(loc, names, 10),
+    stock: stockLines_(sumStock_(moves), names),
+    recent: recentMovements_(moves, names, 10),
     kit: vanKit_(),
     partsVersion: partsVersion_(parts),
     user: { name: user.Name, role: user.Role }
   };
-  if (partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
+  if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
   return out;
 }
 
@@ -301,30 +302,32 @@ function vanData_(user, partsVersion) {
 function actionAdmin(req) {
   const user = sessionUser_(req.session, false);
   if (String(user.Role).toLowerCase() !== 'admin') throw err_('forbidden', 'Admins only.');
-  ensureSiteTokens_();
-  const lines = {};
+  // Closed sites are included (active: false) so they can be reopened
+  const sites = ensureSiteTokens_().filter(s => s.Name);
+  const moves = movementColumns_();
   const lastActivity = {};
-  movementColumns_().forEach(m => {
-    const k = m.site + '|' + m.family;
-    lines[k] = (lines[k] || 0) + m.qty;
+  moves.forEach(m => {
     const t = m.row.Timestamp;
     if (t instanceof Date && (!lastActivity[m.site] || t > lastActivity[m.site])) lastActivity[m.site] = t;
   });
+  const printers = readTable_('Printers'), kitRows = readTable_('Kits');
   const machines = {};
-  readTable_('Printers').forEach(p => {
+  printers.forEach(p => {
     (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || ''), noKit: noKit_(p) });
   });
-  // Closed sites are included (active: false) so they can be reopened
-  const sites = readTable_('Sites').filter(s => s.Name);
   const index = {};
   sites.forEach((s, i) => { index[String(s.SiteID)] = i; });
+  const stockAt = stockAll_(moves);
   const stock = [];
   const totals = {};
-  Object.keys(lines).forEach(k => {
-    const [site, family] = k.split('|');
-    if (index[site] === undefined || !lines[k]) return;
-    stock.push([index[site], family, lines[k]]);
-    if (lines[k] > 0) totals[site] = (totals[site] || 0) + lines[k];
+  Object.keys(stockAt).forEach(site => {
+    if (index[site] === undefined) return;
+    Object.keys(stockAt[site]).forEach(family => {
+      const qty = stockAt[site][family];
+      if (!qty) return;
+      stock.push([index[site], family, qty]);
+      if (qty > 0) totals[site] = (totals[site] || 0) + qty;
+    });
   });
   const parts = readTable_('Parts');
   return {
@@ -335,8 +338,8 @@ function actionAdmin(req) {
       machines: machines[String(s.SiteID)] || [],
       active: isTrue_(s.Active)
     })),
-    models: knownModels_(),
-    kits: kitsByModel_(),
+    models: knownModels_(printers, kitRows),
+    kits: kitsByModel_(kitRows),
     stock: stock,
     parts: parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]),
     unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length,
@@ -358,18 +361,18 @@ const cleanText_ = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').t
 /** Model names are matched exactly against the Kits tab, so they are stored one way: capitals, single spaces. */
 const cleanModel_ = v => cleanText_(v, 40).toUpperCase();
 
-/** Every model in use or with a kit, for the admin's pick list. */
-function knownModels_() {
+/** Every model in use or with a kit, for the admin's pick list. Pass the tabs if they have already been read. */
+function knownModels_(printers, kitRows) {
   const set = {};
-  readTable_('Printers').forEach(p => { const m = cleanModel_(p.Model); if (m) set[m] = true; });
-  readTable_('Kits').forEach(k => { const m = cleanModel_(k.Model); if (m) set[m] = true; });
+  (printers || readTable_('Printers')).forEach(p => { const m = cleanModel_(p.Model); if (m) set[m] = true; });
+  (kitRows || readTable_('Kits')).forEach(k => { const m = cleanModel_(k.Model); if (m) set[m] = true; });
   return Object.keys(set).sort();
 }
 
-/** { MODEL: { family: qty } } from the Kits tab. */
-function kitsByModel_() {
+/** { MODEL: { family: qty } } from the Kits tab (pass its rows if already read). */
+function kitsByModel_(kitRows) {
   const out = {};
-  readTable_('Kits').forEach(k => {
+  (kitRows || readTable_('Kits')).forEach(k => {
     const m = cleanModel_(k.Model), f = normaliseCode(k.Family).family;
     if (m && f) (out[m] = out[m] || {})[f] = Number(k.Qty) || 0;
   });
@@ -537,23 +540,45 @@ function movementColumns_() {
   });
 }
 
-function stockBySite_(siteId) {
+// Stock is never stored: it is the sum of a site's (or van's) Movements rows. Each request reads the
+// Movements tab once and works everything out from that.
+
+/** One site's or van's movements, oldest first. */
+function movementsAt_(siteId) {
+  return movementColumns_().filter(m => m.site === String(siteId));
+}
+
+/** { family: qty } from a list of movements. */
+function sumStock_(moves) {
   const out = {};
-  movementColumns_().forEach(m => {
-    if (m.site === String(siteId)) out[m.family] = (out[m.family] || 0) + m.qty;
+  moves.forEach(m => { out[m.family] = (out[m.family] || 0) + m.qty; });
+  return out;
+}
+
+/** Stock at every site and van: { siteId: { family: qty } }. */
+function stockAll_(moves) {
+  const out = {};
+  (moves || movementColumns_()).forEach(m => {
+    const s = out[m.site] = out[m.site] || {};
+    s[m.family] = (s[m.family] || 0) + m.qty;
   });
   return out;
 }
 
-function stockList_(siteId, names) {
-  const s = stockBySite_(siteId);
-  return Object.keys(s).filter(f => s[f] !== 0)
-    .map(f => ({ family: f, name: names[f] || '', qty: s[f] }))
+function stockBySite_(siteId) {
+  return sumStock_(movementsAt_(siteId));
+}
+
+/** The non-zero lines of a { family: qty } stock, with part names, for the app. */
+function stockLines_(stock, names) {
+  return Object.keys(stock).filter(f => stock[f] !== 0)
+    .map(f => ({ family: f, name: names[f] || '', qty: stock[f] }))
     .sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
 }
 
-function recentMovements_(siteId, names, limit) {
-  return movementColumns_().filter(m => m.site === String(siteId)).slice(-limit).reverse().map(m => ({
+/** The latest of a site's movements, newest first. */
+function recentMovements_(moves, names, limit) {
+  return moves.slice(-limit).reverse().map(m => ({
     at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty,
     type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo
   }));
@@ -617,15 +642,18 @@ function col_(tab, heading) {
   return i + 1;
 }
 
-/** Gives every named site an ID, a QR token and Active=true where missing. */
+/** Gives every named site an ID, a QR token and Active=true where missing. Returns the Sites rows, filled in. */
 function ensureSiteTokens_() {
   const sh = sheet_('Sites');
-  readTable_('Sites').forEach(s => {
+  const sites = readTable_('Sites');
+  const fill = (s, field, value) => { s[field] = value; sh.getRange(s._row, col_('Sites', field)).setValue(value); };
+  sites.forEach(s => {
     if (!s.Name) return;
-    if (!s.SiteID) sh.getRange(s._row, col_('Sites', 'SiteID')).setValue('S' + String(s._row - 1).padStart(4, '0'));
-    if (!s.Token) sh.getRange(s._row, col_('Sites', 'Token')).setValue(newToken_());
-    if (s.Active === '' || s.Active === null) sh.getRange(s._row, col_('Sites', 'Active')).setValue(true);
+    if (!s.SiteID) fill(s, 'SiteID', 'S' + String(s._row - 1).padStart(4, '0'));
+    if (!s.Token) fill(s, 'Token', newToken_());
+    if (s.Active === '' || s.Active === null) fill(s, 'Active', true);
   });
+  return sites;
 }
 
 function newToken_() {
@@ -787,8 +815,6 @@ const SETTINGS_DEFAULTS = [
   ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']
 ];
-// Values from earlier versions of this report, replaced by setup if still unchanged
-const SETTINGS_OLD_DEFAULTS = { PartsReason: ['CAR STOCK', 'Uptime Kit'], SDCallNo: ['Up Time Kit'] };
 
 // Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site
 const KIT_USE_TYPES = ['CUSTOMER_FITTED', 'USED'];
@@ -837,14 +863,10 @@ function kitUsage_(from, to) {
   readTable_('Printers').forEach(p => {
     if (noKit_(p)) return;   // e.g. a training machine
     const list = models[String(p.SiteID)] = models[String(p.SiteID)] || [];
-    const m = String(p.Model).trim().toUpperCase();
+    const m = cleanModel_(p.Model);
     if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once
   });
-  const kits = {};
-  readTable_('Kits').forEach(k => {
-    const m = String(k.Model).trim().toUpperCase(), f = normaliseCode(k.Family).family;
-    if (m && f) (kits[m] = kits[m] || {})[f] = true;
-  });
+  const kits = kitsByModel_();
   const names = partNames_(readTable_('Parts'));
   const bySite = {};
   movementColumns_().forEach(m => {
@@ -852,7 +874,7 @@ function kitUsage_(from, to) {
     const t = m.row.Timestamp;
     if (!(t instanceof Date) || t <= from || t > to) return;   // after the last report, up to now
     const siteModels = models[m.site] || [];
-    if (!siteModels.some(mod => kits[mod] && kits[mod][m.family])) return;
+    if (!siteModels.some(mod => kits[mod] && m.family in kits[mod])) return;
     const s = bySite[m.site] = bySite[m.site] || { site: sites[m.site], models: siteModels, parts: {} };
     s.parts[m.family] = s.parts[m.family] || { family: m.family, name: names[m.family] || '', qty: 0 };
     s.parts[m.family].qty += -m.qty;

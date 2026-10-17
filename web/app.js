@@ -1060,8 +1060,6 @@
   /** Takes in a full set of dashboard data (from loading, or returned by a change) and redraws. */
   function applyAdmin(r, fromSaved) {
       if (!fromSaved) { const keep = Object.assign({}, r); delete keep.ok; store.set('pt_admin', keep); }
-      // Older backends send fewer details per site; fill the gaps so the dashboard still works
-      r.sites = (r.sites || []).map(s => Object.assign({ town: '', postcode: '', printers: [], machines: [], lastActivity: '', items: 0, active: true }, s));
       admin.data = r;
       admin.parts = new Map((r.parts || []).map(([family, name, codes]) => [family, { family, name, codes: String(codes || '') }]));
       admin.byFamily = new Map();
@@ -1072,7 +1070,7 @@
         admin.bySite[si].push({ family, qty });
       });
       admin.qrBuilt = false;
-      $('adminSummary').textContent = fromSaved || r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
+      $('adminSummary').textContent = '';
       renderAdminStats();
       renderPartResults();
       renderSites();
@@ -1125,7 +1123,6 @@
   function renderNewParts() {
     const out = $('newPartList'); out.textContent = '';
     const list = admin.data.newParts;
-    if (!list) { out.append(el('p', { class: 'muted' }, 'The Apps Script backend needs updating to list new parts (paste the new Code.gs and deploy a new version).')); return; }
     if (!list.length) { out.append(el('p', { class: 'muted' }, 'All new parts have been checked.')); return; }
     list.forEach(p => {
       const name = el('input', { class: 'input', value: p.name === 'Unnamed part' ? '' : p.name, placeholder: 'Part name', 'aria-label': 'Name for ' + p.family });
