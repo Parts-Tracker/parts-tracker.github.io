@@ -240,7 +240,18 @@
       <div class="tabs no-print" role="tablist">
         <button role="tab" data-admin-tab="find" aria-selected="true">Find a part</button>
         <button role="tab" data-admin-tab="sites" aria-selected="false">Sites</button>
+        <button role="tab" data-admin-tab="surplus" aria-selected="false">Surplus</button>
         <button role="tab" data-admin-tab="qr" aria-selected="false">QR codes</button>
+      </div>
+
+      <div class="admin-panel" id="admin-surplus" hidden>
+        <div class="card-head"><p class="muted" id="surplusSummary"></p><button class="small" id="surplusCopy">Copy list</button></div>
+        <p class="muted small-print" id="surplusRule"></p>
+        <div id="surplusList"></div>
+        <details class="card" id="surplusSoonBox">
+          <summary id="surplusSoonHead"></summary>
+          <ul class="list" id="surplusSoonList"></ul>
+        </details>
       </div>
 
       <div class="admin-panel" id="admin-find">

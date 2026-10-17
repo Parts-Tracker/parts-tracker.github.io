@@ -333,9 +333,13 @@ function actionAdmin(req) {
   });
   const parts = readTable_('Parts');
   const vans = vanHoldings_(stockAt, user);
+  const spare = surplus_(sites, moves, stockAt, printers, kitRows);
   return {
     vans: vans.vans,
     vanStock: vans.stock,
+    surplus: spare.surplus,
+    surplusSoon: spare.soon,
+    surplusDays: spare.days,
     recountDays: recountDays_(),
     sites: sites.map(s => ({
       id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token,
@@ -401,10 +405,52 @@ function vanHoldings_(stockAt, me) {
   return { vans: vans, stock: stock };
 }
 
+/** A whole number of days from the Settings tab, or the default. */
+function settingDays_(name, fallback) {
+  const n = Number(settings_()[name]);
+  return n > 0 ? Math.floor(n) : fallback;
+}
 /** Days after its last count that a site should be counted again (Settings tab, RecountDays). */
-function recountDays_() {
-  const n = Number(settings_().RecountDays);
-  return n > 0 ? n : 90;
+function recountDays_() { return settingDays_('RecountDays', 90); }
+
+/**
+ * Surplus at open sites, worked out from stock already read (vans are left out: they have their own van kit).
+ * - A part in the site's Up Time Kit (kit x machines, No kit machines left out): anything above the kit, straight away.
+ * - Any other part: all of it, once it has been neither used nor delivered at that site for SurplusDays.
+ *   Until then it is listed as becoming surplus, with the days left.
+ * Returns { surplus: [[siteIndex, family, qty, 'kit', kitQty] | [siteIndex, family, qty, 'idle', idleDays]],
+ *           soon: [[siteIndex, family, qty, daysLeft]], days }.
+ */
+function surplus_(sites, moves, stockAt, printers, kitRows) {
+  const days = settingDays_('SurplusDays', 60);
+  const kits = kitsByModel_(kitRows);
+  const want = {};   // site -> { family: kit qty for all its kit machines }
+  printers.forEach(p => {
+    const m = cleanModel_(p.Model), id = String(p.SiteID);
+    if (noKit_(p) || !kits[m]) return;
+    const w = want[id] = want[id] || {};
+    Object.keys(kits[m]).forEach(f => { w[f] = (w[f] || 0) + kits[m][f]; });
+  });
+  const last = {};   // "site|family" -> when that part was last delivered, counted in, or used there
+  moves.forEach(m => {
+    const t = m.row.Timestamp, k = m.site + '|' + m.family;
+    if (t instanceof Date && m.qty !== 0 && (!last[k] || t > last[k])) last[k] = t;
+  });
+  const now = Date.now(), surplus = [], soon = [];
+  sites.forEach((s, i) => {
+    const id = String(s.SiteID), held = stockAt[id] || {}, w = want[id] || {};
+    if (!isTrue_(s.Active)) return;
+    Object.keys(held).forEach(f => {
+      const qty = held[f];
+      if (qty <= 0) return;
+      if (w[f] > 0) { if (qty > w[f]) surplus.push([i, f, qty - w[f], 'kit', w[f]]); return; }
+      const t = last[id + '|' + f];
+      const idle = t ? Math.floor((now - t.getTime()) / 86400000) : days;
+      if (idle >= days) surplus.push([i, f, qty, 'idle', idle]);
+      else soon.push([i, f, qty, days - idle]);
+    });
+  });
+  return { surplus: surplus, soon: soon, days: days };
 }
 
 /** Every model in use or with a kit, for the admin's pick list. Pass the tabs if they have already been read. */
@@ -858,6 +904,7 @@ const SETTINGS_DEFAULTS = [
   ['SDCallNo', 'Uptime Kit', 'SD CALL No. on the order form.'],
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
   ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.'],
+  ['SurplusDays', 60, 'A part that is not in a site\'s Up Time Kit counts as surplus once it has been neither used nor delivered there for this many days.'],
   ['RecountDays', 90, 'Engineers are asked to count a site again this many days after its last stock count. Sites never counted, or with stock below zero, are always asked.'],
   ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']

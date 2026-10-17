@@ -233,8 +233,8 @@ button.danger:disabled { opacity: 0.6; }
 .list.compact li { padding-top: 6px; padding-bottom: 6px; }
 .new-part .btn { margin-top: 8px; }
 #newBack { margin-bottom: 4px; }
-.tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 4px 0 12px; }
-.tabs button { min-height: 44px; font-size: 0.92rem; }
+.tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 4px 0 12px; }
+.tabs button { min-height: 44px; font-size: 0.88rem; padding-left: 4px; padding-right: 4px; }
 .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
 .filter-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .filter-row select { margin-top: 6px; }
@@ -313,3 +313,9 @@ h1 .updating { vertical-align: middle; }
 .recount-card button { flex: none; }
 /* Find a part: who holds it */
 .holders-head { margin: 12px 0 2px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+
+/* Surplus report */
+.small-print { font-size: 0.82rem; margin-top: 0; }
+#surplusSoonBox summary { cursor: pointer; font-weight: 700; }
+#surplusSoonBox[open] summary { margin-bottom: 6px; }
+.surplus-site .part-head { cursor: pointer; }

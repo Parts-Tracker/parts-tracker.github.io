@@ -765,6 +765,36 @@
     check('raising it again tops the assumed stock back up', stockOf(dg.SiteID, 'P859K4874X') === Math.max(machinesAt('SC180') + machinesAt('EC1100'), btrAfter), stockOf(dg.SiteID, 'P859K4874X'));
     check('kit corrections do not trigger the kit email', sendDailyKitReport() === 0 && mail.length === 0);
 
+    // ---- Surplus report ----
+    const daysAgo = d => new Date(Date.now() - d * 86400000 - 3600000);
+    appendObjects_('Sites', [{ SiteID: 'S1777', Name: 'Surplus Test Ltd', Address: 'Hull', Postcode: 'HU1 1AA', Token: 'surplustesttoken0000000000000001', Active: true, LastCount: new Date() }]);
+    appendObjects_('Printers', [{ SiteID: 'S1777', Model: 'SC180', Serial: 'SUR-1' }]);
+    const mv = (id, f, q, type, t) => ({ MovementID: id, Timestamp: t || new Date(), SiteID: 'S1777', Family: f, ExactCode: f, Qty: q, Type: type, By: 'T', Role: 'engineer' });
+    appendObjects_('Movements', [
+      mv('s1', 'P859K4874X', 3, 'BOOK_IN'),                    // kit part, kit is 1: 2 surplus straight away
+      mv('s2', 'P053K0668X', 1, 'BOOK_IN'),                    // kit part at the kit level: fine
+      mv('s3', 'P127K5896X', 2, 'BOOK_IN', daysAgo(90)),       // not in the kit, idle 90 days: surplus
+      mv('s4', 'P023E2950X', 2, 'BOOK_IN', daysAgo(90)), mv('s5', 'P023E2950X', -1, 'USED', daysAgo(10)),   // used 10 days ago: 50 days left
+      mv('s6', 'P004E1900X', 1, 'BOOK_IN')]);                  // just delivered: 60 days left
+    const adm = actionAdmin({ session: call({ action: 'login', site: 'admin', pin: '9999' }).session });
+    const si = adm.sites.findIndex(x => x.id === 'S1777');
+    const sur = adm.surplus.filter(r => r[0] === si), soon = adm.surplusSoon.filter(r => r[0] === si);
+    const line = f => sur.find(r => r[1] === f);
+    check('surplus: above the kit counts straight away, only the extra', JSON.stringify(line('P859K4874X')) === JSON.stringify([si, 'P859K4874X', 2, 'kit', 1]) && !line('P053K0668X'), sur);
+    check('surplus: a part outside the kit, idle 90 days, all of it', line('P127K5896X') && line('P127K5896X')[2] === 2 && line('P127K5896X')[3] === 'idle' && line('P127K5896X')[4] >= 90, sur);
+    check('surplus: parts used or delivered recently are becoming surplus, with the days left', !line('P023E2950X') && !line('P004E1900X') &&
+      soon.some(r => r[1] === 'P023E2950X' && r[2] === 1 && r[3] === 50) && soon.some(r => r[1] === 'P004E1900X' && r[3] === 60) && adm.surplusDays === 60, soon);
+    check('surplus: vans are left out', !adm.surplus.some(r => !adm.sites[r[0]]));
+    if (A.state.user && /admin/i.test(A.state.user.role)) {
+      A.admin.data = null;
+      A.openAdmin();
+      await waitFor(() => A.admin.data && A.admin.data.surplus && $('adminUpdating').hidden);
+      document.querySelector('[data-admin-tab=surplus]').click();
+      const surText = $('admin-surplus').textContent;
+      check('Surplus tab lists the site, the parts and why', visible('admin-surplus') && /Surplus Test Ltd/.test(surText) && /2nd BTR/.test(surText) && /Above the kit: kit is 1/.test(surText) &&
+        /Not used or delivered for 9\d days/.test(surText) && /Becoming surplus/.test(surText) && /surplus in 50 days/.test(surText), surText.slice(0, 400));
+    } else check('Surplus tab check needs the admin signed in', false, A.state.user);
+
     // ---- Safeguards on the Movements tab ----
     const mvSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Movements');
     runSetup();

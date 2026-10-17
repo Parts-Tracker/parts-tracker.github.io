@@ -1160,6 +1160,7 @@
       renderSites();
       if (admin.tab === 'qr') renderQr();
       if (admin.tab === 'new') renderNewParts();
+      if (admin.tab === 'surplus') renderSurplus();
       // Still looking at one site: redraw it from the new data
       if (!$('admin-site').hidden && admin.siteId) {
         const i = r.sites.findIndex(s => s.id === admin.siteId);
@@ -1207,8 +1208,9 @@
   function showAdminTab(tab) {
     admin.tab = tab;
     document.querySelectorAll('[data-admin-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.adminTab === tab)));
-    ['find', 'sites', 'site', 'new', 'qr'].forEach(t => { $('admin-' + t).hidden = t !== tab; });
+    ['find', 'sites', 'site', 'new', 'qr', 'surplus'].forEach(t => { $('admin-' + t).hidden = t !== tab; });
     if (tab === 'qr') renderQr();
+    if (tab === 'surplus') renderSurplus();
   }
 
   // --- New parts added from scans: an admin checks the code and name, then approves ---
@@ -1255,6 +1257,61 @@
         err,
         approve));
     });
+  }
+
+  // --- Surplus: parts that can be collected from sites ---
+  /** Surplus lines grouped by site, most items first: [{ s, i, lines: [{ family, qty, why, n }], total }]. */
+  function surplusBySite() {
+    const by = new Map();
+    (admin.data.surplus || []).forEach(([i, family, qty, why, n]) => {
+      if (!by.has(i)) by.set(i, { s: admin.data.sites[i], i, lines: [], total: 0 });
+      const g = by.get(i);
+      g.lines.push({ family, qty, why, n });
+      g.total += qty;
+    });
+    return [...by.values()].sort((a, b) => b.total - a.total || a.s.name.localeCompare(b.s.name));
+  }
+  const surplusWhy = l => l.why === 'kit' ? 'Above the kit: kit is ' + l.n : 'Not used or delivered for ' + l.n + ' days';
+  function renderSurplus() {
+    if (!admin.data) return;
+    const groups = surplusBySite();
+    const items = groups.reduce((n, g) => n + g.total, 0);
+    const days = admin.data.surplusDays || 60;
+    $('surplusSummary').textContent = items ? items + (items === 1 ? ' item' : ' items') + ' to collect from ' + groups.length + (groups.length === 1 ? ' site' : ' sites') : 'No surplus at any site';
+    $('surplusCopy').hidden = !items;
+    $('surplusRule').textContent = 'Surplus = anything above a site\'s Up Time Kit, or any other part not used or delivered there for ' + days +
+      ' days. Sites never counted are marked assumed: their stock is not confirmed yet.';
+    const list = $('surplusList'); list.textContent = '';
+    groups.forEach(g => {
+      const card = el('div', { class: 'card part-card surplus-site' },
+        el('div', { class: 'part-head', onclick: () => showSiteDetail(g.i) },
+          el('div', { class: 'item-main' },
+            el('div', { class: 'item-name' }, g.s.name, g.s.lastCount ? null : el('span', { class: 'tag' }, 'assumed')),
+            el('div', { class: 'item-sub' }, siteLine(g.s))),
+          el('div', { class: 'part-total' }, g.total + (g.total === 1 ? ' item' : ' items'))),
+        el('ul', { class: 'list' }, g.lines.sort((a, b) => adminPartName(a.family).localeCompare(adminPartName(b.family))).map(l =>
+          el('li', {}, el('div', { class: 'item-main' },
+            el('div', { class: 'item-name' }, adminPartName(l.family)),
+            el('div', { class: 'item-sub' }, l.family + ' · ' + surplusWhy(l))), el('div', { class: 'qty' }, l.qty)))));
+      list.append(card);
+    });
+    const soon = (admin.data.surplusSoon || []).slice().sort((a, b) => a[3] - b[3]);
+    $('surplusSoonBox').hidden = !soon.length;
+    $('surplusSoonHead').textContent = 'Becoming surplus (' + soon.length + (soon.length === 1 ? ' part)' : ' parts)');
+    const sl = $('surplusSoonList'); sl.textContent = '';
+    soon.forEach(([i, family, qty, left]) => {
+      const s = admin.data.sites[i];
+      sl.append(el('li', { class: 'clickable', onclick: () => showSiteDetail(i) },
+        el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, adminPartName(family)),
+          el('div', { class: 'item-sub' }, s.name + ' · surplus in ' + left + (left === 1 ? ' day' : ' days') + ' if not used')),
+        el('div', { class: 'qty' }, qty)));
+    });
+  }
+  async function copySurplus() {
+    const text = surplusBySite().map(g => g.s.name + (g.s.postcode ? ' (' + g.s.postcode + ')' : '') + '\n' +
+      g.lines.map(l => '  ' + l.family + '  ' + adminPartName(l.family) + '  x' + l.qty).join('\n')).join('\n\n');
+    try { await navigator.clipboard.writeText(text); toast('Surplus list copied'); }
+    catch (e) { openSheet('Surplus list', [el('pre', { class: 'order-text' }, text), el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]); }
   }
 
   // --- Find a part: which sites hold it ---
@@ -1603,6 +1660,7 @@
     $('nositeVan').addEventListener('click', openVan);
     $('nositeChoose').addEventListener('click', chooseSite);
     $('findPart').addEventListener('click', openFind);
+    $('surplusCopy').addEventListener('click', copySurplus);
     $('vanFindPart').addEventListener('click', openFind);
     $('recountGo').addEventListener('click', () => startMode('COUNT'));
     $('changeSite').addEventListener('click', chooseSite);
