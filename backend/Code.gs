@@ -83,7 +83,8 @@ const ACTIONS = {
   siteSave: actionSiteSave,
   machineAdd: actionMachineAdd,
   machineMove: actionMachineMove,
-  machineRemove: actionMachineRemove
+  machineRemove: actionMachineRemove,
+  whereIs: actionWhereIs
 };
 
 // ---------------------------------------------------------------- actions
@@ -99,6 +100,7 @@ function actionBootstrap(req) {
     printers: readTable_('Printers').filter(p => String(p.SiteID) === String(site.SiteID)).map(p => p.Model),
     stock: stockLines_(sumStock_(moves), names),
     recent: recentMovements_(moves, names, 10),
+    recountDays: recountDays_(),
     partsVersion: partsVersion_(parts)
   };
   if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
@@ -161,7 +163,7 @@ function actionSubmit(req) {
   const batchId = String(req.batchId || '').slice(0, 64);
   if (!batchId) throw err_('bad_request', 'Missing batch id.');
   const items = Array.isArray(req.items) ? req.items : [];
-  if (!items.length && !(type === 'COUNT' && (req.zero || []).length)) throw err_('bad_request', 'Nothing to record.');
+  if (!items.length && type !== 'COUNT') throw err_('bad_request', 'Nothing to record.');   // an empty count = "nothing here"
 
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -330,7 +332,11 @@ function actionAdmin(req) {
     });
   });
   const parts = readTable_('Parts');
+  const vans = vanHoldings_(stockAt, user);
   return {
+    vans: vans.vans,
+    vanStock: vans.stock,
+    recountDays: recountDays_(),
     sites: sites.map(s => ({
       id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token,
       items: totals[s.SiteID] || 0, lastCount: iso_(s.LastCount), lastActivity: iso_(lastActivity[String(s.SiteID)]),
@@ -360,6 +366,46 @@ function requireAdmin_(req) {
 const cleanText_ = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
 /** Model names are matched exactly against the Kits tab, so they are stored one way: capitals, single spaces. */
 const cleanModel_ = v => cleanText_(v, 40).toUpperCase();
+
+/**
+ * Find a part (engineers and admins): which engineers' vans and which open sites hold each part.
+ * Only stock actually held (above zero). Rows are [index, family, qty] to keep the response small.
+ */
+function actionWhereIs(req) {
+  const user = sessionUser_(req.session, false);
+  if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
+  const stockAt = stockAll_();
+  const vans = vanHoldings_(stockAt, user);
+  const sites = [], siteStock = [];
+  readTable_('Sites').filter(s => isTrue_(s.Active) && s.Name).forEach(s => {
+    const held = stockAt[String(s.SiteID)] || {};
+    const lines = Object.keys(held).filter(f => held[f] > 0);
+    if (!lines.length) return;
+    lines.forEach(f => siteStock.push([sites.length, f, held[f]]));
+    // counted: false = the stock there is assumed (e.g. a kit loaded by fillKitStock) until someone counts it
+    sites.push({ name: s.Name, town: s.Address, postcode: s.Postcode, counted: !!s.LastCount });
+  });
+  return { vans: vans.vans, vanStock: vans.stock, sites: sites, siteStock: siteStock, at: new Date().toISOString() };
+}
+
+/** Engineers' vans holding stock: { vans: [{ name, me }], stock: [[vanIndex, family, qty]] }, held stock only. */
+function vanHoldings_(stockAt, me) {
+  const vans = [], stock = [];
+  readTable_('Users').filter(u => isTrue_(u.Active) && u.UserID && /^(engineer|admin)$/i.test(String(u.Role))).forEach(u => {
+    const held = stockAt[vanId_(u)] || {};
+    const lines = Object.keys(held).filter(f => held[f] > 0);
+    if (!lines.length) return;
+    lines.forEach(f => stock.push([vans.length, f, held[f]]));
+    vans.push({ name: u.Name, me: !!me && String(u.UserID) === String(me.UserID) });
+  });
+  return { vans: vans, stock: stock };
+}
+
+/** Days after its last count that a site should be counted again (Settings tab, RecountDays). */
+function recountDays_() {
+  const n = Number(settings_().RecountDays);
+  return n > 0 ? n : 90;
+}
 
 /** Every model in use or with a kit, for the admin's pick list. Pass the tabs if they have already been read. */
 function knownModels_(printers, kitRows) {
@@ -812,6 +858,7 @@ const SETTINGS_DEFAULTS = [
   ['SDCallNo', 'Uptime Kit', 'SD CALL No. on the order form.'],
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
   ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.'],
+  ['RecountDays', 90, 'Engineers are asked to count a site again this many days after its last stock count. Sites never counted, or with stock below zero, are always asked.'],
   ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']
 ];

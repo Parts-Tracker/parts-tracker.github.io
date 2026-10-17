@@ -116,7 +116,7 @@
 
     // ---- Engineer: used on a job needs sign-in and a job number ----
     const tile = m => document.querySelector('[data-mode=' + m + ']');
-    check('customers do not see Change site', $('changeSite').hidden);
+    check('customers do not see Change site, Find a part or count prompts', $('changeSite').hidden && $('findPart').hidden && $('recountCard').hidden);
     check('customers see only their tiles', tile('USED').hidden && tile('COUNT').hidden && !tile('CUSTOMER_FITTED').hidden && !tile('BOOK_IN').hidden);
     $('userChip').click();
     check('engineer sign in asks for a PIN', await waitFor(() => $('sheetTitle').textContent.includes('sign in')));
@@ -372,6 +372,65 @@
     [...$('sheetBody').querySelectorAll('.pick')].find(b => /Sample Print/.test(b.textContent)).click();
     await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co');
 
+    // ---- Recount prompts (engineers): recount due, stock below zero ----
+    const sitesTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites');
+    const setLastCount = (s, v) => sitesTab.getRange(s._row, col_('Sites', 'LastCount')).setValue(v);
+    const here = rows('Sites').find(s => s.Token === site.Token);
+    // Earlier checks left a part below zero here: set it aside for these checks, and put it back after
+    const belowHere = Object.entries(stockBySite_(here.SiteID)).filter(([, q]) => q < 0);
+    const shift = (sign, tag) => appendObjects_('Movements', belowHere.map(([f, q], i) => ({ MovementID: tag + i, Timestamp: new Date(), SiteID: here.SiteID, Family: f, ExactCode: f, Qty: sign * q, Type: 'COUNT', By: 'T', Role: 'engineer' })));
+    shift(-1, 'aside');
+    setLastCount(here, new Date());
+    await A.loadSite();
+    check('a site counted recently asks for no count', $('recountCard').hidden);
+    setLastCount(here, new Date(Date.now() - 100 * 86400000));
+    await A.loadSite();
+    check('a site last counted 100 days ago asks for a recount', !$('recountCard').hidden && /Recount due/.test($('recountTitle').textContent) && /100 days/.test($('recountWhy').textContent), $('recountWhy').textContent);
+    $('recountGo').click();
+    check('Count now starts a stock count', await waitFor(() => visible('view-scan') && A.state.mode === 'COUNT'));
+    $('scanCancel').click();
+    await waitFor(() => visible('view-home'));
+    appendObjects_('Movements', [{ MovementID: 'neg1', Timestamp: new Date(), SiteID: here.SiteID, Family: 'P059K5556X', ExactCode: 'P059K5556X', Qty: -1, Type: 'USED', By: 'T', Role: 'engineer' }]);
+    await A.loadSite();
+    check('stock below zero asks for a count first', !$('recountCard').hidden && /Stock count needed/.test($('recountTitle').textContent) && $('recountCard').classList.contains('tone-pink'));
+    appendObjects_('Movements', [{ MovementID: 'neg2', Timestamp: new Date(), SiteID: here.SiteID, Family: 'P059K5556X', ExactCode: 'P059K5556X', Qty: 1, Type: 'COUNT', By: 'T', Role: 'engineer' }]);
+    setLastCount(here, new Date());
+    await A.loadSite();
+    check('prompt goes once the site is counted', $('recountCard').hidden);
+    shift(1, 'back');
+    await A.loadSite();
+
+    // ---- Find a part (engineers): engineers' vans first, then sites ----
+    const other = rows('Sites')[1];
+    setLastCount(other, '');
+    appendObjects_('Movements', [
+      { MovementID: 'f1', Timestamp: new Date(), SiteID: 'VAN-E01', Family: 'P019E7597X', ExactCode: 'P019E7597X', Qty: 2, Type: 'BOOK_IN', By: 'T', Role: 'engineer' },
+      { MovementID: 'f2', Timestamp: new Date(), SiteID: 'VAN-A01', Family: 'P019E7597X', ExactCode: 'P019E7597X', Qty: 3, Type: 'BOOK_IN', By: 'T', Role: 'admin' },
+      { MovementID: 'f3', Timestamp: new Date(), SiteID: other.SiteID, Family: 'P019E7597X', ExactCode: 'P019E7597X', Qty: 1, Type: 'BOOK_IN', By: 'T', Role: 'engineer' }]);
+    const closeSheetBtn = () => [...$('sheetBody').querySelectorAll('button')].find(b => b.textContent.trim() === 'Close').click();
+    check('engineers see Find a part', !$('findPart').hidden);
+    $('findPart').click();
+    await waitFor(() => $('sheetTitle').textContent === 'Find a part' && /Type a part code/.test($('sheetBody').textContent));
+    const findBox = $('sheetBody').querySelector('input');
+    findBox.value = 'finger strip'; findBox.dispatchEvent(new Event('input'));
+    const findText = $('sheetBody').textContent;
+    const holderNames = [...$('sheetBody').querySelectorAll('.item-name')].map(n => n.firstChild.textContent);
+    check("Find a part lists engineers' vans first, then sites", /Finger Strip PR/.test(findText) && findText.indexOf("Engineers' vans") < findText.indexOf('Sites') &&
+      holderNames.includes('You') && holderNames.includes('Test Admin') && holderNames.includes('Demo Graphics Ltd'), holderNames);
+    check('a site never counted is marked assumed', /assumed/.test(findText));
+    check('Find a part is saved on the phone', ((JSON.parse(localStorage.getItem('pt_where')) || {}).vans || []).length >= 2);
+    closeSheetBtn();
+    apiDown = true;
+    $('vanFindPart').click();
+    check('Find a part works from the saved copy with no signal', await waitFor(() => /No signal: showing what this phone saved/.test($('sheetBody').textContent)));
+    apiDown = false;
+    closeSheetBtn();
+
+    // A count that finds nothing still records that the site was counted
+    const emptyCount = call({ action: 'submit', session: A.state.session, site: other.Token, type: 'COUNT', batchId: 'empty-count-1', items: [], zero: [] });
+    check('a count that found nothing still records the count', emptyCount.ok && emptyCount.recorded === 0 && !!rows('Sites')[1].LastCount, emptyCount);
+    setLastCount(other, '');
+
     // ---- Admin: QR codes for every site ----
     const adminLogin = call({ action: 'login', site: 'admin', pin: '9999' });
     const admin = call({ action: 'admin', session: adminLogin.session });
@@ -386,12 +445,19 @@
     check('admin page asks for a PIN', await waitFor(() => $('sheetTitle').textContent === 'Admin sign in' && !$('sheet').classList.contains('hidden')));
     ['9', '9', '9', '9', 'OK'].forEach(key);
     check('dashboard loads with summary figures', await waitFor(() => $('adminStats').children.length === 4 && $('adminStats').textContent.includes('sites')), $('adminSummary').textContent);
+    const needCount = rows('Sites').filter(s => isTrue_(s.Active) && (!s.LastCount || Object.values(stockBySite_(s.SiteID)).some(q => q < 0) || (Date.now() - new Date(s.LastCount)) / 86400000 >= 90));
+    const needTile = [...$('adminStats').querySelectorAll('.stat')].find(t => /need(s)? a count/.test(t.textContent));
+    check('dashboard counts the sites that need a count', needCount.length >= 1 && needTile && needTile.querySelector('.stat-value').textContent === String(needCount.length), needTile && needTile.textContent);
+    needTile.click();
+    check('tapping it lists just those sites', visible('admin-sites') && $('siteSort').value === 'need' && $('siteList').querySelectorAll('li').length === needCount.length && /Demo Graphics/.test($('siteList').textContent) && /Never counted/.test($('siteList').textContent), $('siteList').textContent);
+    $('siteSort').value = 'name';
+    A.showAdminTab('find');
     check('admin PIN sheet closed after sign in', $('sheet').classList.contains('hidden'));
     check('summary counts both sites', $('adminStats').querySelector('.stat-value').textContent === '2');
 
     // New parts to check: tap the figure, correct the name, approve
     check('engineers cannot approve parts', call({ action: 'reviewPart', session: call({ action: 'login', site: site.Token, pin: '1111' }).session, family: 'P999K1234X' }).code === 'forbidden');
-    const newTile = $('adminStats').querySelector('button.stat');
+    const newTile = [...$('adminStats').querySelectorAll('button.stat')].find(b => /new part/.test(b.textContent));
     check('new parts figure is a button', newTile && /^1new part to check/.test(newTile.textContent), $('adminStats').textContent);
     newTile.click();
     check('new parts list opens with the part', !$('admin-new').hidden && $('newPartList').querySelectorAll('.new-part').length === 1 && /P999K1234X/.test($('newPartList').textContent) && /Test Widget/.test($('newPartList').querySelector('input').value));
@@ -399,7 +465,7 @@
     npInput.value = 'Test Widget Assembly';
     $('newPartList').querySelector('.new-part .btn').click();
     check('approving marks it reviewed with the corrected name', await waitFor(() => { const p = rows('Parts').find(x => x.Family === 'P999K1234X'); return p && isTrue_(p.Reviewed) && p.Name === 'Test Widget Assembly'; }));
-    check('figure drops to 0 and the list closes', await waitFor(() => $('admin-new').hidden && !$('admin-find').hidden && !$('adminStats').querySelector('button.stat') && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
+    check('figure drops to 0 and the list closes', await waitFor(() => $('admin-new').hidden && !$('admin-find').hidden && ![...$('adminStats').querySelectorAll('button.stat')].some(b => /new part/.test(b.textContent)) && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
     check('admin data no longer counts it', call({ action: 'admin', session: A.state.session }).unreviewedParts === 0);
 
     // ---- Daily Up Time Kit email: kit parts used at kit sites, with an order-form button per site ----
@@ -495,7 +561,11 @@
     $('partQuery').value = 'FFB059K61'; $('partQuery').dispatchEvent(new Event('input'));
     check('part search accepts box (FFB) codes', /Sample Print Co/.test($('partResults').textContent));
     $('partQuery').value = 'feed roll'; $('partQuery').dispatchEvent(new Event('input'));
-    check('part search by name lists parts not held anywhere too', $('partResults').querySelectorAll('.part-card').length === 2 && /Not at any site/.test($('partResults').textContent));
+    const nudger = [...$('partResults').querySelectorAll('.part-card')].find(c => /Nudger/.test(c.textContent));
+    check('part search by name lists parts not held at any site too', $('partResults').querySelectorAll('.part-card').length === 2 && nudger && !/Sites/.test(nudger.textContent) && /in 1 van|Not held anywhere/.test(nudger.textContent), nudger && nudger.textContent);
+    $('partQuery').value = 'finger strip'; $('partQuery').dispatchEvent(new Event('input'));
+    const vanFound = $('partResults').textContent;
+    check("admin Find a part lists engineers' vans too", /Engineers' vans/.test(vanFound) && /Test Admin/.test(vanFound) && /Test Engineer/.test(vanFound) && /in 2 vans/.test(vanFound), vanFound.slice(0, 300));
 
     // Sites list and one site's stock
     document.querySelector('[data-admin-tab=sites]').click();

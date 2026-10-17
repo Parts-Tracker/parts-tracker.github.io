@@ -194,12 +194,36 @@
     (d.printers || []).forEach(m => pl.append(el('span', {}, m)));
     // Customers only see what they can do; engineers see everything once signed in
     $('changeSite').hidden = !isEngineer();
+    $('findPart').hidden = !isEngineer();
     document.querySelectorAll('.action[data-engineer]').forEach(b => { b.hidden = !isEngineer(); });
+    const need = isEngineer() && recountNeed(d);
+    $('recountCard').hidden = !need;
+    if (need) {
+      $('recountCard').className = 'recount-card tone-' + need.tone;
+      $('recountTitle').textContent = need.title;
+      $('recountWhy').textContent = need.why;
+    }
     const parts = (d.stock || []).filter(s => s.qty > 0);
     const total = parts.reduce((n, s) => n + s.qty, 0);
     $('stockSummary').textContent = parts.length ? total + ' items, ' + parts.length + ' different parts' : 'Nothing recorded yet';
     renderRecent($('recentList'), d.recent);
     renderBanner();
+  }
+
+  /**
+   * Whether this site needs a stock count: stock below zero (the figures are wrong), never counted
+   * (stock is assumed until someone counts it), or the last count was RecountDays or more ago.
+   */
+  function recountNeed(d) {
+    const below = (d.stock || []).filter(s => s.qty < 0).length;
+    if (below) return { tone: 'pink', title: 'Stock count needed', why: 'Stock went below zero for ' + below + (below === 1 ? ' part' : ' parts') + ' here, so the figures are wrong.' };
+    if (!d.site.lastCount) {
+      return { tone: 'blue', title: 'Never counted', why: (d.stock || []).some(s => s.qty > 0)
+        ? 'The stock on record here is assumed until someone counts it.' : 'Count it once, even if nothing is here.' };
+    }
+    const days = Math.floor((Date.now() - Date.parse(d.site.lastCount)) / 86400000);
+    if (days >= (d.recountDays || 90)) return { tone: 'blue', title: 'Recount due', why: 'Last counted ' + days + ' days ago.' };
+    return null;
   }
 
   function renderRecent(rl, recent) {
@@ -291,7 +315,7 @@
   // ---------- Sign in ----------
   function signOut(quiet) {
     state.session = null; state.user = null;
-    store.del('pt_session'); store.del('pt_user'); store.del('pt_admin');
+    store.del('pt_session'); store.del('pt_user'); store.del('pt_admin'); store.del('pt_where');
     state.van = null; store.del('pt_van');   // the next engineer must not see this one's van
     renderUserChip(); renderHome();
     if (state.where === 'van') { state.where = 'site'; goHome(); }
@@ -585,7 +609,7 @@
     const stock = {};
     (cur() && cur().stock || []).forEach(s => { stock[s.family] = s.qty; });
     const list = $('reviewList'); list.textContent = '';
-    if (!state.basket.length) list.append(el('li', { class: 'muted' }, 'Nothing scanned.'));
+    if (!state.basket.length) list.append(el('li', { class: 'muted' }, 'Nothing scanned.' + (mode === 'COUNT' ? ' Send to record that nothing is here.' : '')));
     state.basket.forEach(b => list.append(el('li', {},
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
@@ -611,7 +635,9 @@
     const err = $('reviewError');
     if (mode === 'USED' && !jobNo) { err.textContent = 'Enter the job or ticket number.'; err.hidden = false; return; }
     const zero = Array.from($('zeroList').querySelectorAll('input:checked')).map(i => i.value);
-    if (!state.basket.length && !zero.length) { err.textContent = 'Nothing to send.'; err.hidden = false; return; }
+    // A count that found nothing, where nothing is on record, still records that the site was counted
+    const emptyCount = mode === 'COUNT' && !$('zeroList').children.length;
+    if (!state.basket.length && !zero.length && !emptyCount) { err.textContent = 'Nothing to send.'; err.hidden = false; return; }
     $('reviewSend').disabled = true;
     const batch = {
       batchId: uuid(), van: state.where === 'van' || undefined, site: state.where === 'van' ? null : state.site,
@@ -652,6 +678,7 @@
     if (batch.type === 'COUNT') (batch.zero || []).forEach(f => { if (!batch.items.some(it => C.normalise(it.code).family === f)) add(f, '', 0); });
     target.stock = Object.values(stock).filter(s => s.qty !== 0).sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
     target.recent = recent.concat(target.recent || []).slice(0, 10);
+    if (batch.type === 'COUNT' && !batch.van && target.site) target.site.lastCount = batch.createdAt;
     if (batch.van) { store.set('pt_van', state.van); renderVan(); }
     else { store.set('pt_boot_' + state.site, state.data); renderHome(); }
   }
@@ -959,6 +986,62 @@
     else show('view-nosite');
   }
 
+  // ---------- Find a part (engineers): which engineers' vans and which sites hold it ----------
+  // The answer is saved on the phone, so it opens straight away and works with no signal (marked with its age).
+  async function openFind() {
+    if (!isEngineer()) { askPin(openFind, 'Engineer sign in'); return; }
+    let where = store.get('pt_where', null);
+    const input = el('input', { class: 'input', placeholder: 'Part code or name, e.g. 059K6158 or feed roll', autocomplete: 'off' });
+    const status = el('p', { class: 'muted' });
+    const results = el('div', {});
+    const render = () => {
+      results.textContent = '';
+      if (!where) return;
+      const q = input.value.trim();
+      if (!q) { results.append(el('p', { class: 'muted' }, "Type a part code or name. Engineers' vans are listed first, then sites.")); return; }
+      const parts = matchParts(state.parts, q).slice(0, 8);
+      if (!parts.length) { results.append(el('p', { class: 'muted' }, 'No matching parts.')); return; }
+      parts.forEach(p => {
+        const vans = where.vanStock.filter(l => l[1] === p.family).map(l => ({ v: where.vans[l[0]], qty: l[2] })).sort((a, b) => b.qty - a.qty);
+        const sites = where.siteStock.filter(l => l[1] === p.family).map(l => ({ s: where.sites[l[0]], qty: l[2] })).sort((a, b) => b.qty - a.qty);
+        const card = el('div', { class: 'card part-card' }, el('div', { class: 'part-head' },
+          el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, p.name), el('div', { class: 'item-sub mono' }, p.family))));
+        if (vans.length) {
+          card.append(el('p', { class: 'holders-head' }, "Engineers' vans"), el('ul', { class: 'list' }, vans.map(h =>
+            el('li', {}, el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, h.v.me ? 'You' : h.v.name)), el('div', { class: 'qty' }, h.qty)))));
+        }
+        if (sites.length) {
+          card.append(el('p', { class: 'holders-head' }, 'Sites'), el('ul', { class: 'list' }, sites.map(h =>
+            el('li', {}, el('div', { class: 'item-main' },
+              el('div', { class: 'item-name' }, h.s.name, h.s.counted ? null : el('span', { class: 'tag', title: 'Never counted: the stock there is assumed' }, 'assumed')),
+              el('div', { class: 'item-sub' }, [h.s.town, h.s.postcode].filter(Boolean).join(' · '))), el('div', { class: 'qty' }, h.qty)))));
+        }
+        if (!vans.length && !sites.length) card.append(el('p', { class: 'muted' }, 'No engineer or site has this on record.'));
+        results.append(card);
+      });
+    };
+    input.addEventListener('input', render);
+    openSheet('Find a part', [input, status, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]);
+    const showStatus = text => { status.textContent = ''; if (text === 'updating') status.append(el('span', { class: 'updating' }, 'Updating…')); else status.textContent = text; };
+    showStatus(where ? 'updating' : 'Loading who holds what…');
+    render();
+    input.focus();
+    try {
+      const r = await api({ action: 'whereIs', session: state.session });
+      if (!r.ok) {
+        if (r.code === 'session') { closeSheet(); signOut(true); askPin(openFind, 'Engineer sign in'); return; }
+        showStatus(r.error); return;
+      }
+      delete r.ok;
+      where = r;
+      store.set('pt_where', r);
+      showStatus('');
+      render();
+    } catch (e) {
+      showStatus(e.code === 'offline' ? (where ? 'No signal: showing what this phone saved ' + when(where.at) + '.' : 'No signal. Find a part needs signal the first time.') : e.message);
+    }
+  }
+
   // ---------- Change site (engineers) ----------
   // Lets a signed-in engineer move to another site in the same tab, instead of scanning its QR code
   // (each scan opens a new browser tab). The list is kept on the phone for poor signal.
@@ -1093,7 +1176,7 @@
     const open = openSites();
     const items = open.reduce((n, s) => n + s.items, 0);
     const holding = open.filter(s => s.items > 0).length;
-    const never = open.filter(s => !s.lastCount).length;
+    const need = admin.data.sites.filter((s, i) => countReason(i)).length;
     const stat = (value, label, tone, onclick) => el(onclick ? 'button' : 'div', { class: 'stat' + (tone ? ' tone-' + tone : ''), onclick },
       el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label + (onclick ? ' ›' : '')));
     const box = $('adminStats'); box.textContent = '';
@@ -1101,8 +1184,23 @@
     box.append(
       stat(open.length, 'sites', 'green'),
       stat(items, 'items at ' + holding + (holding === 1 ? ' site' : ' sites'), 'lime'),
-      stat(never, 'never counted', never ? 'pink' : 'blue'),
+      stat(need, need === 1 ? 'site needs a count' : 'sites need a count', need ? 'pink' : 'blue', need ? showNeedCount : null),
       stat(toCheck, toCheck === 1 ? 'new part to check' : 'new parts to check', toCheck ? 'purple' : 'blue', toCheck ? showNewParts : null));
+  }
+
+  /** Why an open site needs a count ('' if it doesn't): stock below zero, never counted, or recount due. */
+  function countReason(i) {
+    const s = admin.data.sites[i];
+    if (!s.active) return '';
+    if ((admin.bySite[i] || []).some(l => l.qty < 0)) return 'below zero';
+    if (!s.lastCount) return 'never counted';
+    return (Date.now() - Date.parse(s.lastCount)) / 86400000 >= (admin.data.recountDays || 90) ? 'recount due' : '';
+  }
+  function showNeedCount() {
+    $('siteQuery').value = '';
+    $('siteSort').value = 'need';
+    showAdminTab('sites');
+    renderSites();
   }
 
   function showAdminTab(tab) {
@@ -1159,17 +1257,20 @@
   }
 
   // --- Find a part: which sites hold it ---
-  function matchAdminParts(q) {
+  function matchParts(partsMap, q) {
     const raw = q.toUpperCase().replace(/\s+/g, '');
     const core = raw.replace(/^(PFFB|PFB|FFB|FB|P)(?=\d)/, '');
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const out = [];
-    for (const p of admin.parts.values()) {
+    for (const p of partsMap.values()) {
       const codeHit = core.length >= 3 && /\d/.test(core) && (p.family.slice(1).startsWith(core.slice(0, 9)) || p.codes.toUpperCase().replace(/[\s,]+/g, ' ').includes(core));
       const nameHit = words.length && words.every(w => p.name.toLowerCase().includes(w));
       if (codeHit || nameHit) out.push(p);
     }
     return out;
+  }
+  function vanHoldersOf(family) {
+    return (admin.data.vanStock || []).filter(l => l[1] === family).map(l => ({ van: admin.data.vans[l[0]], qty: l[2] })).sort((a, b) => b.qty - a.qty);
   }
   function holdersOf(family) {
     return (admin.byFamily.get(family) || []).filter(h => h.qty !== 0).sort((a, b) => b.qty - a.qty);
@@ -1180,7 +1281,7 @@
     const q = $('partQuery').value.trim();
     let parts, heading;
     if (q) {
-      parts = matchAdminParts(q);
+      parts = matchParts(admin.parts, q);
       heading = parts.length ? parts.length + (parts.length === 1 ? ' matching part' : ' matching parts') : 'No matching parts';
     } else {
       // Nothing typed: show the parts held at the most sites
@@ -1188,19 +1289,27 @@
         .sort((a, b) => holdersOf(b.family).length - holdersOf(a.family).length).slice(0, 10);
       heading = parts.length ? 'Most widely held parts' : 'No stock recorded at any site yet';
     }
-    const total = f => holdersOf(f).reduce((n, h) => n + Math.max(0, h.qty), 0);
+    const total = f => holdersOf(f).reduce((n, h) => n + Math.max(0, h.qty), 0) + vanHoldersOf(f).reduce((n, h) => n + h.qty, 0);
     parts.sort((a, b) => total(b.family) - total(a.family));
     out.append(el('p', { class: 'muted' }, heading));
     parts.slice(0, 25).forEach(p => {
       const holders = holdersOf(p.family);
       const held = holders.filter(h => h.qty > 0).length, below = holders.filter(h => h.qty < 0).length;
+      const vans = vanHoldersOf(p.family);
+      const atSites = holders.reduce((n, h) => n + Math.max(0, h.qty), 0), inVans = vans.reduce((n, h) => n + h.qty, 0);
       // Below-zero records mean more were used than booked in: the site needs a count, not a "0 held"
-      const summary = held ? total(p.family) + ' at ' + held + (held === 1 ? ' site' : ' sites')
-        : below ? 'Below zero at ' + below + (below === 1 ? ' site' : ' sites') + ': needs a count' : 'Not at any site';
+      const summary = [vans.length ? inVans + ' in ' + vans.length + (vans.length === 1 ? ' van' : ' vans') : '',
+        held ? atSites + ' at ' + held + (held === 1 ? ' site' : ' sites') : ''].filter(Boolean).join(' · ')
+        || (below ? 'Below zero at ' + below + (below === 1 ? ' site' : ' sites') + ': needs a count' : 'Not held anywhere');
       const card = el('div', { class: 'card part-card' },
         el('div', { class: 'part-head' },
           el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, p.name), el('div', { class: 'item-sub mono' }, p.family)),
-          el('div', { class: 'part-total' + (held ? '' : below ? ' below' : ' none') }, summary)));
+          el('div', { class: 'part-total' + (held || vans.length ? '' : below ? ' below' : ' none') }, summary)));
+      if (vans.length) {
+        card.append(el('p', { class: 'holders-head' }, "Engineers' vans"),
+          el('ul', { class: 'list' }, vans.map(h => el('li', {}, el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, h.van.name)), el('div', { class: 'qty' }, h.qty)))));
+        if (holders.length) card.append(el('p', { class: 'holders-head' }, 'Sites'));
+      }
       if (holders.length) {
         const ul = el('ul', { class: 'list' });
         holders.forEach(h => {
@@ -1224,8 +1333,10 @@
   function renderSites() {
     if (!admin.data) return;
     const sort = $('siteSort').value;
-    // Closed sites go to the bottom of the list
-    const rows = filteredSites().sort((a, b) => (b.active - a.active) || (
+    const order = { 'below zero': 0, 'never counted': 1, 'recount due': 2 };
+    // Closed sites go to the bottom of the list; "Needs a count" shows only those, most urgent first
+    const rows = filteredSites().filter(s => sort !== 'need' || countReason(s.i)).sort((a, b) => (b.active - a.active) || (
+      sort === 'need' ? order[countReason(a.i)] - order[countReason(b.i)] || a.name.localeCompare(b.name) :
       sort === 'items' ? b.items - a.items || a.name.localeCompare(b.name)
         : sort === 'count' ? (a.lastCount || '').localeCompare(b.lastCount || '') || a.name.localeCompare(b.name)
           : a.name.localeCompare(b.name)));
@@ -1236,7 +1347,8 @@
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, s.name, s.active ? null : el('span', { class: 'tag' }, 'closed')),
         el('div', { class: 'item-sub' }, [siteLine(s), s.printers.join(', ')].filter(Boolean).join(' · ')),
-        el('div', { class: 'item-sub' + (s.lastCount ? '' : ' warn-text') }, s.lastCount ? 'Counted ' + when(s.lastCount) : 'Never counted')),
+        el('div', { class: 'item-sub' + (countReason(s.i) ? ' warn-text' : '') }, [countReason(s.i) === 'below zero' ? 'Stock below zero' : '',
+          s.lastCount ? 'Counted ' + when(s.lastCount) : 'Never counted', countReason(s.i) === 'recount due' ? 'recount due' : ''].filter(Boolean).join(' · '))),
       el('div', { class: 'qty' }, s.items))));
     if (!rows.length) ul.append(el('li', { class: 'muted' }, 'No sites match.'));
   }
@@ -1489,6 +1601,9 @@
     }));
     $('nositeVan').addEventListener('click', openVan);
     $('nositeChoose').addEventListener('click', chooseSite);
+    $('findPart').addEventListener('click', openFind);
+    $('vanFindPart').addEventListener('click', openFind);
+    $('recountGo').addEventListener('click', () => startMode('COUNT'));
     $('changeSite').addEventListener('click', chooseSite);
     $('vanStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
     $('orderParts').addEventListener('click', orderParts);
@@ -1567,7 +1682,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite };
+  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite, openFind };
 
   init();
 })();

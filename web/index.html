@@ -56,6 +56,7 @@
         <div class="hero-label">My van <span class="updating" id="vanUpdating" hidden>Updating…</span></div>
         <h1 class="site-name" id="vanName"></h1>
         <div class="hero-address" id="vanSummary"></div>
+        <button class="small hero-change" id="vanFindPart">Find a part</button>
       </div>
 
       <button class="action action-main tone-green" data-van-mode="BOOK_IN">
@@ -100,7 +101,16 @@
         <h1 class="site-name" id="siteName"></h1>
         <div class="hero-address"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg><span id="siteAddress"></span></div>
         <div class="chips" id="printerList"></div>
-        <button class="small hero-change" id="changeSite" hidden>Change site</button>
+        <div class="hero-buttons">
+          <button class="small hero-change" id="changeSite" hidden>Change site</button>
+          <button class="small hero-change" id="findPart" hidden>Find a part</button>
+        </div>
+      </div>
+
+      <!-- Engineers only: this site needs a stock count -->
+      <div class="recount-card tone-blue" id="recountCard" hidden>
+        <div class="item-main"><div class="item-name" id="recountTitle"></div><div class="item-sub" id="recountWhy"></div></div>
+        <button class="small primary" id="recountGo">Count now</button>
       </div>
 
       <button class="action action-main tone-green" data-mode="BOOK_IN">
@@ -245,6 +255,7 @@
             <option value="name">A to Z</option>
             <option value="items">Most stock</option>
             <option value="count">Longest since count</option>
+            <option value="need">Needs a count</option>
           </select>
         </div>
         <div class="card-head"><p class="muted" id="siteCount"></p><button class="small" id="siteAdd">+ Add site</button></div>

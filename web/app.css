@@ -303,3 +303,13 @@ h1 .updating { vertical-align: middle; }
 .updating::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: updating-pulse 0.9s ease-in-out infinite alternate; }
 @keyframes updating-pulse { from { opacity: 0.25; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .updating::before { animation: none; } }
+
+/* Engineers: a site that needs a stock count (never counted, recount due, or stock below zero) */
+.hero-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.recount-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin: 0 0 14px; border-radius: var(--radius); border: 2px solid var(--tone-solid); background: var(--tone-bg); color: var(--tone-ink); }
+.recount-card[hidden] { display: none; }
+.recount-card .item-name { font-weight: 700; }
+.recount-card .item-sub { color: inherit; opacity: 0.85; }
+.recount-card button { flex: none; }
+/* Find a part: who holds it */
+.holders-head { margin: 12px 0 2px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
