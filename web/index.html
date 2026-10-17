@@ -42,10 +42,18 @@
       </div>
     </section>
 
+    <!-- A site this phone has not opened before, while it loads -->
+    <section class="view" id="view-loading" hidden>
+      <div class="card center">
+        <h1 id="loadingName">Loading site…</h1>
+        <p class="muted">Getting this site's stock. Next time it opens straight away.</p>
+      </div>
+    </section>
+
     <!-- The signed-in engineer's van -->
     <section class="view" id="view-van" hidden>
       <div class="hero">
-        <div class="hero-label">My van</div>
+        <div class="hero-label">My van <span class="updating" id="vanUpdating" hidden>Updating…</span></div>
         <h1 class="site-name" id="vanName"></h1>
         <div class="hero-address" id="vanSummary"></div>
       </div>
@@ -88,7 +96,7 @@
     <!-- Site home -->
     <section class="view" id="view-home" hidden>
       <div class="hero">
-        <div class="hero-label">Site</div>
+        <div class="hero-label">Site <span class="updating" id="siteUpdating" hidden>Updating…</span></div>
         <h1 class="site-name" id="siteName"></h1>
         <div class="hero-address"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg><span id="siteAddress"></span></div>
         <div class="chips" id="printerList"></div>

@@ -295,3 +295,10 @@ button.danger:disabled { opacity: 0.6; }
 .hero-change { min-height: 36px; margin-top: 12px; }
 #nositeChoose { margin-top: 10px; }
 .tag.current { border-color: var(--accent); color: var(--accent-strong); }
+
+/* "Updating…": shown on a saved copy while the latest figures load */
+.updating { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em; text-transform: none; vertical-align: 1px; background: color-mix(in srgb, currentColor 14%, transparent); }
+.updating[hidden] { display: none; }
+.updating::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: updating-pulse 0.9s ease-in-out infinite alternate; }
+@keyframes updating-pulse { from { opacity: 0.25; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .updating::before { animation: none; } }

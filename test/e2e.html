@@ -25,10 +25,10 @@
     check('editor setup (separate project) creates all tabs', Object.keys(SHEETS).every(n => SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n)));
     loadSampleData_();
     const call = req => JSON.parse(doPost({ postData: { contents: JSON.stringify(req) } }).getContent());
-    let apiDown = false, slowMs = 0;
+    let apiDown = false, slowMs = 0, slowAll = false;
     window.PT_MOCK_API = async req => {
       if (apiDown) { const e = new Error('No connection.'); e.code = 'offline'; throw e; }
-      if (slowMs && req.action === 'submit') await sleep(slowMs);
+      if (slowMs && (req.action === 'submit' || slowAll)) await sleep(slowMs);
       return call(req);
     };
     const saved = () => waitFor(() => $('doneStatus').textContent === 'Saved');
@@ -336,6 +336,29 @@
     check('action tiles use the secondary colours', tone('[data-mode=USED]') === 'tone-pink' && tone('[data-mode=COUNT]') === 'tone-blue' && tone('[data-mode=CUSTOMER_FITTED]') === 'tone-purple' && tone('#viewStockBtn') === 'tone-lime');
     check('recent activity coloured by type', $('recentList').querySelector('.ricon.tone-green') !== null);
 
+    // ---- Saved copies show at once, marked Updating… while the latest figures load ----
+    slowAll = true; slowMs = 600;
+    const siteLoad = A.loadSite();
+    check('saved site shows at once, marked Updating…', visible('view-home') && !$('siteUpdating').hidden);
+    await siteLoad;
+    check('Updating… goes once the site is up to date', $('siteUpdating').hidden);
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    check('saved van shows at once, marked Updating…', await waitFor(() => visible('view-van') && !$('vanUpdating').hidden));
+    check('Updating… goes once the van is up to date', await waitFor(() => $('vanUpdating').hidden));
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    const unseen = rows('Sites')[1];
+    localStorage.removeItem('pt_boot_' + unseen.Token);
+    $('changeSite').click();
+    await waitFor(() => $('sheetBody').querySelectorAll('.pick').length >= 2);
+    [...$('sheetBody').querySelectorAll('.pick')].find(b => /Demo Graphics/.test(b.textContent)).click();
+    check('a site not opened before shows a loading card with its name, not the last site', visible('view-loading') && /Loading Demo Graphics/.test($('loadingName').textContent), $('loadingName').textContent);
+    check('then its home page once loaded', await waitFor(() => visible('view-home') && $('siteName').textContent === 'Demo Graphics Ltd', 5000));
+    slowAll = false; slowMs = 0;
+    $('changeSite').click();
+    await waitFor(() => $('sheetBody').querySelectorAll('.pick').length >= 2);
+    [...$('sheetBody').querySelectorAll('.pick')].find(b => /Sample Print/.test(b.textContent)).click();
+    await waitFor(() => visible('view-home') && $('siteName').textContent === 'Sample Print Co');
+
     // ---- Admin: QR codes for every site ----
     const adminLogin = call({ action: 'login', site: 'admin', pin: '9999' });
     const admin = call({ action: 'admin', session: adminLogin.session });
@@ -345,6 +368,7 @@
     // ---- Admin page in the app: one printable QR card per site ----
     $('userChip').click();
     check('engineer signs out', !A.state.user && $('userChip').textContent === 'Engineer sign in');
+    check('signing out forgets the van saved on the phone', !A.state.van && !localStorage.getItem('pt_van') && !localStorage.getItem('pt_admin'));
     A.openAdmin();
     check('admin page asks for a PIN', await waitFor(() => $('sheetTitle').textContent === 'Admin sign in' && !$('sheet').classList.contains('hidden')));
     ['9', '9', '9', '9', 'OK'].forEach(key);
@@ -670,7 +694,7 @@
     document.querySelector('#whereSwitch [data-where=site]').click();
     await sleep(50);
     document.querySelector('#whereSwitch [data-where=van]').click();
-    check('My van opens after archiving', await waitFor(() => visible('view-van') && $('vanName').textContent === 'Test Engineer'), [visible('view-van'), $('vanName').textContent, $('whereSwitch').hidden, document.querySelector('#whereSwitch [data-where=van]').disabled]);
+    check('My van opens after archiving, for whoever is signed in', await waitFor(() => visible('view-van') && $('vanName').textContent === A.state.user.name), [visible('view-van'), $('vanName').textContent, $('whereSwitch').hidden, document.querySelector('#whereSwitch [data-where=van]').disabled]);
     check('archive spreadsheet holds no carried-forward lines', archived.getDataRange().getValues().slice(1).every(r => !r.includes('CARRIED_FORWARD')));
   } catch (e) {
     check('test run crashed', false, String(e && e.stack || e));

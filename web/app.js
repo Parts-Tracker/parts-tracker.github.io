@@ -242,13 +242,17 @@
     syncQueue();
   }
 
+  // Views that give way to the site's home page once it has loaded
+  const WAITING_VIEWS = [null, 'view-nosite', 'view-loading'];
   async function loadSite() {
     const cached = store.get('pt_boot_' + state.site, null);
     if (cached && !state.data) {
       state.data = cached;
       renderHome();
-      if (!state.view || state.view === 'view-nosite') show('view-home');
+      if (WAITING_VIEWS.includes(state.view)) show('view-home');
     }
+    if (!state.data && WAITING_VIEWS.includes(state.view)) show('view-loading');
+    $('siteUpdating').hidden = !state.data;   // a saved copy is showing: say it is being brought up to date
     try {
       const r = await api({ action: 'bootstrap', site: state.site, partsVersion: state.partsVersion, session: state.session });
       if (!r.ok) {
@@ -271,7 +275,7 @@
       store.set('pt_boot_' + state.site, state.data);
       renderUserChip();
       renderHome();
-      if (!state.view || state.view === 'view-nosite') show('view-home');
+      if (WAITING_VIEWS.includes(state.view)) show('view-home');
     } catch (e) {
       state.offline = e.code === 'offline';
       if (!state.data) {
@@ -281,12 +285,14 @@
       }
       renderBanner();
     }
+    finally { $('siteUpdating').hidden = true; }
   }
 
   // ---------- Sign in ----------
   function signOut(quiet) {
     state.session = null; state.user = null;
     store.del('pt_session'); store.del('pt_user'); store.del('pt_admin');
+    state.van = null; store.del('pt_van');   // the next engineer must not see this one's van
     renderUserChip(); renderHome();
     if (state.where === 'van') { state.where = 'site'; goHome(); }
     else renderWhereSwitch(state.view);
@@ -312,6 +318,7 @@
         const r = await api({ action: 'login', pin, site: state.site || 'admin' });
         setChecking(false);
         if (!r.ok) { err.textContent = r.error; err.hidden = false; pin = ''; update(); return; }
+        if (state.van && !(state.van.user && state.van.user.name === r.user.name)) { state.van = null; store.del('pt_van'); }   // another engineer's van
         state.session = r.session; state.user = r.user;
         store.set('pt_session', r.session); store.set('pt_user', r.user);
         closeSheet(); renderUserChip(); renderHome(); renderWhereSwitch(state.view);
@@ -761,11 +768,13 @@
     if (!isEngineer()) { askPin(openVan, 'Engineer sign in'); return; }
     state.where = 'van';
     if (state.van) renderVan();
+    else { $('vanName').textContent = state.user ? state.user.name : ''; $('vanSummary').textContent = 'Loading your van…'; $('vanKitStatus').textContent = ''; $('vanKitList').textContent = ''; $('vanRecentList').textContent = ''; $('vanKitActions').hidden = true; }
     show('view-van');
     await loadVan();
   }
 
   async function loadVan() {
+    $('vanUpdating').hidden = !state.van;
     try {
       const r = await api({ action: 'van', session: state.session, partsVersion: state.partsVersion });
       if (!r.ok) {
@@ -785,7 +794,7 @@
       state.offline = e.code === 'offline';
       if (!state.van) toast(state.offline ? 'No connection. Your van loads once you have signal.' : e.message);
       renderBanner();
-    }
+    } finally { $('vanUpdating').hidden = true; }
   }
 
   /**
@@ -985,6 +994,7 @@
     state.where = 'site';
     state.data = store.get('pt_boot_' + s.token, null);
     if (state.data) { renderHome(); show('view-home'); }
+    else { $('loadingName').textContent = 'Loading ' + s.name + '…'; show('view-loading'); }
     toast('Now at ' + s.name);
     loadSite().then(() => { if (state.data && state.view !== 'view-home' && state.site === s.token) { renderHome(); show('view-home'); } });
   }
