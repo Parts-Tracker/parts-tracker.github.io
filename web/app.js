@@ -354,7 +354,7 @@
     const root = document.documentElement.style;
     const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
     // With the keyboard open, leave a gap above it so the last button is never clipped by its edge
-    const gap = kb > 0 ? 16 : 0;
+    const gap = kb > 0 ? 32 : 0;
     root.setProperty('--kb', (kb + gap) + 'px');
     root.setProperty('--vvh', Math.round(vv.height - gap) + 'px');
   }
