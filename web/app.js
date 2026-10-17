@@ -1039,44 +1039,65 @@
           if (!part) return;
           if (/^\s+$/.test(part)) { holder.append(part); return; }
           const word = el('span', { class: 'fall-word' });
-          [...part].forEach(ch => {
-            const c = el('span', { class: 'fall-char' }, ch);
-            c.style.setProperty('--t', ms(rand(900, 1700)) + 'ms');
-            c.style.setProperty('--d', ms(rand(0, 1400)) + 'ms');
-            c.style.setProperty('--x', Math.round(rand(-60, 60)) + 'px');
-            c.style.setProperty('--r', Math.round(rand(-540, 540)) + 'deg');
-            word.append(c);
-          });
+          [...part].forEach(ch => word.append(el('span', { class: 'fall-char' }, ch)));
           holder.append(word);
         });
         node.replaceWith(holder);
         wrapped.push([holder, node]);
       });
     });
+    // Everything falls exactly far enough to leave the bottom of the screen, wherever it starts: the page is
+    // often scrolled to the bottom, so things above the screen fall down through it and out
+    const vh = window.innerHeight;
+    const fallTime = (base, dist) => base * Math.min(1.8, Math.max(0.8, Math.sqrt(dist / vh)));   // further = a little longer
+    let lastGone = 0;
+    const chars = roots.flatMap(r => [...r.querySelectorAll('.fall-char')]);
+    const charTops = chars.map(c => c.getBoundingClientRect().top);   // all read first: one layout pass
+    chars.forEach((c, i) => {
+      const dist = Math.max(60, vh - charTops[i] + 40);
+      const t = ms(fallTime(rand(900, 1500), dist)), d = ms(rand(0, 1400));
+      c.style.setProperty('--fall', Math.round(dist) + 'px');
+      c.style.setProperty('--t', t + 'ms');
+      c.style.setProperty('--d', d + 'ms');
+      c.style.setProperty('--x', Math.round(rand(-60, 60)) + 'px');
+      c.style.setProperty('--r', Math.round(rand(-540, 540)) + 'deg');
+      lastGone = Math.max(lastGone, d + t);
+    });
+    // 2. Then the cards and buttons come off their hinges. Tall ones tilt less, or they swing across the screen.
+    const boxes = [...document.querySelectorAll('#view-van .hero, #view-van .action, #view-van .card, #whereSwitch, .do-not-press-row')];
+    const hingeAt = ms(1600);
+    const boxPlan = boxes.map(b => {
+      const r = b.getBoundingClientRect();
+      const tilt = (Math.random() < 0.5 ? -1 : 1) * Math.max(3, Math.min(rand(12, 28), 28 * 240 / Math.max(240, r.height)));
+      const dist = Math.max(80, vh - r.top + r.width * Math.sin(Math.abs(tilt) * 1.6 * Math.PI / 180) + 60);
+      const t = ms(fallTime(rand(1100, 1500), dist)), d = ms(rand(0, 400));
+      lastGone = Math.max(lastGone, hingeAt + d + t);
+      return { b, tilt, dist, t, d };
+    });
     document.body.classList.add('falling');
     document.documentElement.classList.add('egg');
-    // 2. Then the cards and buttons swing off their hinges
-    const boxes = [...document.querySelectorAll('#view-van .hero, #view-van .action, #view-van .card, #whereSwitch, .do-not-press-row')];
-    const hinge = setTimeout(() => boxes.forEach(b => {
-      b.style.setProperty('--t', ms(rand(1100, 1600)) + 'ms');
-      b.style.setProperty('--d', ms(rand(0, 500)) + 'ms');
-      b.style.setProperty('--r', (Math.random() < 0.5 ? -1 : 1) * Math.round(rand(12, 28)) + 'deg');
+    const hinge = setTimeout(() => boxPlan.forEach(({ b, tilt, dist, t, d }) => {
+      b.style.setProperty('--fall', Math.round(dist) + 'px');
+      b.style.setProperty('--t', t + 'ms');
+      b.style.setProperty('--d', d + 'ms');
+      b.style.setProperty('--r', tilt.toFixed(1) + 'deg');
       b.classList.add('fall-box');
-    }), ms(1600));
-    // 3. The message, then put it all back
+    }), hingeAt);
+    // 3. Once the last piece has gone, the message; then put it all back
     const message = el('div', { class: 'egg-message' }, el('strong', {}, line[0]), el('span', {}, line[1]));
-    const show = setTimeout(() => document.body.append(message), ms(3300));
+    const showAt = lastGone + ms(250);
+    const show = setTimeout(() => document.body.append(message), showAt);
     setTimeout(() => {
       clearTimeout(hinge); clearTimeout(show);
       message.remove();
-      boxes.forEach(b => { b.classList.remove('fall-box'); ['--t', '--d', '--r'].forEach(p => b.style.removeProperty(p)); if (!b.getAttribute('style')) b.removeAttribute('style'); });
+      boxes.forEach(b => { b.classList.remove('fall-box'); ['--t', '--d', '--r', '--fall'].forEach(p => b.style.removeProperty(p)); if (!b.getAttribute('style')) b.removeAttribute('style'); });
       wrapped.forEach(([holder, node]) => holder.replaceWith(node));
       document.body.classList.remove('falling');
       document.documentElement.classList.remove('egg');
       window.scrollTo(0, 0);
       done();
       toast('Phew. All put back.');
-    }, ms(8600));   // the message stays up for about 5 seconds before everything comes back
+    }, showAt + ms(5300));   // the message stays up for about 5 seconds before everything comes back
   }
 
   // ---------- Find a part (engineers): which engineers' vans and which sites hold it ----------

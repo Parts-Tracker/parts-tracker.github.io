@@ -855,9 +855,13 @@
     window.PT_EGG_SPEED = 0.02;
     await waitFor(() => $('vanUpdating').hidden && !/Loading/.test($('vanSummary').textContent));
     const vanBefore = $('view-van').innerHTML, topBefore = document.querySelector('.topbar').textContent;
+    $('doNotPress').scrollIntoView();   // pressed at the bottom of the page, as it always is
     $('doNotPress').click();
     check('Do not press: the letters are wrapped to fall and taps are blocked', document.body.classList.contains('falling') && $('view-van').querySelectorAll('.fall-char').length > 50);
     check('Do not press: the cards swing off, then a message', await waitFor(() => document.querySelector('.fall-box')) && await waitFor(() => /you were told/.test((document.querySelector('.egg-message') || {}).textContent || '')));
+    document.getAnimations().forEach(a => { try { a.finish(); } catch (e) {} });   // where every piece ends up
+    const stillOnScreen = [...document.querySelectorAll('.fall-box, .fall-char')].filter(e => e.getClientRects().length && e.getBoundingClientRect().top < innerHeight - 2);
+    check('Do not press: everything has fallen off the screen before the message', stillOnScreen.length === 0, stillOnScreen.slice(0, 5).map(e => [e.className, e.textContent.slice(0, 20), Math.round(e.getBoundingClientRect().top)]));
     check('Do not press: everything is put back exactly as it was', await waitFor(() => !document.body.classList.contains('falling')) && !document.documentElement.classList.contains('egg') && !document.querySelector('.fall-char, .fall-box, .egg-message') &&
       $('view-van').innerHTML.replace('I said do NOT press', 'Do not press') === vanBefore && document.querySelector('.topbar').textContent === topBefore && $('doNotPress').textContent === 'I said do NOT press',
       (() => { const a = $('view-van').innerHTML.replace('I said do NOT press', 'Do not press'); let i = 0; while (i < a.length && a[i] === vanBefore[i]) i++; return [a.slice(i - 60, i + 80), vanBefore.slice(i - 60, i + 80)]; })());
