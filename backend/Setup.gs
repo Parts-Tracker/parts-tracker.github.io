@@ -87,7 +87,8 @@ function previewKitStock() {
 }
 
 /**
- * Gives every open site a full Up Time Kit for each machine model on the Kits tab (two SC180s = one kit),
+ * Gives every open site a full Up Time Kit for each machine model on the Kits tab (two SC180s = one kit;
+ * machines ticked No kit on the Printers tab are left out),
  * assuming it is all there until an engineer counts it on site. Parts already held are topped up, not doubled,
  * so running it again adds nothing. Recorded as BOOK_IN, which the daily kit email ignores.
  */
@@ -110,6 +111,7 @@ function kitTopUp_() {
   const kits = kitsByModel_();
   const models = {};
   readTable_('Printers').forEach(p => {
+    if (isTrue_(p.NoKit)) return;   // marked No kit on the Printers tab, e.g. a training machine
     const m = cleanModel_(p.Model), id = String(p.SiteID);
     const list = models[id] = models[id] || [];
     if (m && kits[m] && list.indexOf(m) < 0) list.push(m);

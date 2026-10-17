@@ -15,12 +15,12 @@ const SHEET_ID = '';
 
 // Column headings as people see them in the Sheet -> the name the code uses.
 // "Part Number" holds the family code (e.g. P053K0667X); sheets made before the rename still say "Family".
-const HEADER_KEYS = { 'Part Number': 'Family' };
+const HEADER_KEYS = { 'Part Number': 'Family', 'No kit': 'NoKit' };
 const key_ = h => HEADER_KEYS[h] || h;
 
 const SHEETS = {
   Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Token', 'Active', 'LastCount'],   // no customer contact details are kept
-  Printers: ['SiteID', 'Model', 'Serial'],
+  Printers: ['SiteID', 'Model', 'Serial', 'No kit'],   // No kit TRUE: a machine with no Up Time Kit (e.g. a training machine)
   Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
@@ -302,7 +302,7 @@ function actionAdmin(req) {
   });
   const machines = {};
   readTable_('Printers').forEach(p => {
-    (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || '') });
+    (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || ''), noKit: isTrue_(p.NoKit) });
   });
   // Closed sites are included (active: false) so they can be reopened
   const sites = readTable_('Sites').filter(s => s.Name);
@@ -457,7 +457,7 @@ function actionMachineMove(req) {
 
 function moveKitStock_(user, machine, from, to) {
   const model = cleanModel_(machine.Model);
-  const kit = kitsByModel_()[model] || {};
+  const kit = isTrue_(machine.NoKit) ? {} : kitsByModel_()[model] || {};
   const held = stockBySite_(from.SiteID);
   const names = partNames_(readTable_('Parts'));
   const lines = Object.keys(kit).map(f => ({ family: f, qty: Math.min(held[f] || 0, kit[f] || held[f] || 0) })).filter(l => l.qty > 0);
@@ -822,6 +822,7 @@ function kitUsage_(from, to) {
   readTable_('Sites').forEach(s => { sites[String(s.SiteID)] = s; });
   const models = {};
   readTable_('Printers').forEach(p => {
+    if (isTrue_(p.NoKit)) return;   // e.g. a training machine
     const list = models[String(p.SiteID)] = models[String(p.SiteID)] || [];
     const m = String(p.Model).trim().toUpperCase();
     if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once

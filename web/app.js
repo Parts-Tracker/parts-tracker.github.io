@@ -1305,7 +1305,7 @@
     const ul = $('siteMachines'); ul.textContent = '';
     s.machines.forEach(m => ul.append(el('li', {},
       el('div', { class: 'item-main' },
-        el('div', { class: 'item-name' }, m.model, (admin.data.kits || {})[m.model] ? el('span', { class: 'tag current' }, 'kit') : null),
+        el('div', { class: 'item-name' }, m.model, m.noKit ? el('span', { class: 'tag' }, 'no kit') : (admin.data.kits || {})[m.model] ? el('span', { class: 'tag current' }, 'kit') : null),
         el('div', { class: 'item-sub mono' }, m.serial ? 'Serial ' + m.serial : 'No serial number')),
       s.active ? el('div', { class: 'machine-actions' },
         el('button', { class: 'small', onclick: () => openMoveMachine(s, m) }, 'Move'),
@@ -1336,8 +1336,8 @@
   }
 
   /** One kit's worth of the model's kit parts held at the site (what "move the kit" would move). */
-  function kitToMove(s, model) {
-    const kit = (admin.data.kits || {})[model];
+  function kitToMove(s, m) {
+    const kit = m.noKit ? null : (admin.data.kits || {})[m.model];
     if (!kit) return null;
     const held = {};
     admin.bySite[admin.data.sites.indexOf(s)].forEach(l => { held[l.family] = l.qty; });
@@ -1363,7 +1363,7 @@
   }
 
   function confirmMove(s, m, to) {
-    const kit = kitToMove(s, m.model);
+    const kit = kitToMove(s, m);
     const tick = el('input', { type: 'checkbox', checked: true });
     const err = el('div', { class: 'error', hidden: true });
     const kitBox = kit && kit.length ? el('div', { class: 'kit-move' },
