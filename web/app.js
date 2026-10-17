@@ -352,8 +352,11 @@
   function fitToKeyboard() {
     const vv = window.visualViewport; if (!vv) return;
     const root = document.documentElement.style;
-    root.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)) + 'px');
-    root.setProperty('--vvh', Math.round(vv.height) + 'px');
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    // With the keyboard open, leave a gap above it so the last button is never clipped by its edge
+    const gap = kb > 0 ? 16 : 0;
+    root.setProperty('--kb', (kb + gap) + 'px');
+    root.setProperty('--vvh', Math.round(vv.height - gap) + 'px');
   }
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', fitToKeyboard);

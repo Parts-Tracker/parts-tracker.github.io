@@ -272,7 +272,7 @@
     Object.defineProperty(vv, 'offsetTop', { configurable: true, get: () => 0 });
     vv.dispatchEvent(new Event('resize'));
     const withKb = $('sheet').getBoundingClientRect();
-    check('sheet sits just above the keyboard and fits the space left', Math.abs(withKb.bottom - (innerHeight - kbH)) < 2 && withKb.top >= 0, [withKb.top, withKb.bottom, innerHeight, kbH]);
+    check('sheet sits 16px above the keyboard and fits the space left', Math.abs(withKb.bottom - (innerHeight - kbH - 16)) < 2 && withKb.top >= 0, [withKb.top, withKb.bottom, innerHeight, kbH]);
     delete vv.height; delete vv.offsetTop; vv.dispatchEvent(new Event('resize'));
     check('sheet back at the bottom when the keyboard closes', Math.abs($('sheet').getBoundingClientRect().bottom - innerHeight) < 2);
     $('sheetBody').querySelector('.pick').click();
