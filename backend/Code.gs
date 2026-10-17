@@ -706,6 +706,7 @@ function spreadsheet_() {
 
 function sheet_(name) {
   const sh = spreadsheet_().getSheetByName(name);
+  if (!sh && name === 'Movements') throw err_('setup', 'The Movements tab is missing, so stock cannot be worked out. Restore it: Undo, or File > Version history in the Sheet.');
   if (!sh) throw err_('setup', 'The "' + name + '" tab is missing. Run Parts Tracker > Set up sheets.');
   return sh;
 }
@@ -778,7 +779,9 @@ const SETTINGS_DEFAULTS = [
   ['Urgency', 'Low - Will Wait - But Not Long', 'Urgency on the order form. Must match one of the form\'s choices exactly.'],
   ['SDCallNo', 'Uptime Kit', 'SD CALL No. on the order form.'],
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
-  ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.']
+  ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.'],
+  ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
+  ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']
 ];
 // Values from earlier versions of this report, replaced by setup if still unchanged
 const SETTINGS_OLD_DEFAULTS = { PartsReason: ['CAR STOCK', 'Uptime Kit'], SDCallNo: ['Up Time Kit'] };

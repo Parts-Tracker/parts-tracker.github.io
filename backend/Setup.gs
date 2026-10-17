@@ -139,6 +139,125 @@ function logKitPlan_(plan, verb) {
   console.log(verb + ' ' + items + ' item(s) at ' + busy.length + ' site(s). ' + (plan.length - busy.length) + ' kit site(s) already had a full kit.');
 }
 
+// ---- Archive old movements: keeps the Movements tab small without changing any stock
+
+/** Shows what archiveMovements would do, without changing anything. */
+function previewArchive() {
+  const plan = archivePlan_();
+  logArchivePlan_(plan);
+  console.log('Nothing has been changed. Run archiveMovements to do this.');
+}
+
+/**
+ * Copies movements older than ArchiveKeepDays (Settings tab) to the archive spreadsheet, then replaces them on the
+ * Movements tab with one CARRIED_FORWARD line per site/van and part holding their total, so every stock level stays
+ * the same. Movements the daily kit email has not reported yet are never archived.
+ */
+function archiveMovements() {
+  withLock_(() => {
+    const plan = archivePlan_();
+    logArchivePlan_(plan);
+    if (!plan.old.length) return;
+    const main = sheet_('Movements');
+    const stockBefore = stockTotals_();
+
+    // 1. Copy to the archive, and check it all arrived before touching the Movements tab
+    const book = archiveBook_();
+    const arch = book.getSheetByName('Movements') || book.getSheets()[0].setName('Movements');
+    let aHead = arch.getLastRow() ? arch.getRange(1, 1, 1, arch.getLastColumn()).getValues()[0].map(String) : [];
+    plan.head.forEach(h => { if (aHead.map(key_).indexOf(key_(h)) < 0) aHead.push(h); });
+    arch.getRange(1, 1, 1, aHead.length).setValues([aHead]).setFontWeight('bold');
+    const from = plan.head.map(key_);
+    const aRows = plan.originals.map(r => aHead.map(h => { const j = from.indexOf(key_(h)); return j < 0 ? '' : r[j]; }));
+    const start = arch.getLastRow() + 1;
+    arch.getRange(start, 1, aRows.length, aHead.length).setValues(aRows);
+    if (arch.getLastRow() !== start + aRows.length - 1) throw new Error('The archive copy did not complete, so nothing was removed from Movements. Try again.');
+
+    // 2. Rewrite the Movements tab: carried-forward lines first, then the recent movements unchanged
+    const body = plan.carried.concat(plan.keep);
+    if (body.length) main.getRange(2, 1, body.length, plan.head.length).setValues(body);
+    const spare = plan.total - body.length;
+    if (spare > 0) main.deleteRows(body.length + 2, spare);
+
+    // 3. Check every stock level is unchanged
+    const stockAfter = stockTotals_();
+    const keys = Object.keys(Object.assign({}, stockBefore, stockAfter)).filter(k => (stockBefore[k] || 0) !== (stockAfter[k] || 0));
+    if (keys.length) throw new Error('Stock changed for ' + keys.slice(0, 5).join(', ') + '. Restore the Sheet from File > Version history and tell Claude.');
+    console.log('Done. ' + plan.originals.length + ' movement(s) are in the archive: ' + book.getUrl() + '. Every stock level is unchanged.');
+  });
+}
+
+function archivePlan_() {
+  const cfg = settings_();
+  const n = Number(cfg.ArchiveKeepDays);
+  const keepDays = isNaN(n) ? 365 : Math.max(1, n);
+  let cutoff = new Date(Date.now() - keepDays * 86400000);
+  // Keep anything the daily kit email has not reported yet
+  const reportOn = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sendDailyKitReport');
+  const reported = Number(PropertiesService.getScriptProperties().getProperty('kitReportUpTo')) || 0;
+  if (reportOn && reported && reported < cutoff.getTime()) cutoff = new Date(reported);
+
+  const main = sheet_('Movements');
+  const head = main.getRange(1, 1, 1, main.getLastColumn()).getValues()[0].map(String);
+  const total = Math.max(0, main.getLastRow() - 1);
+  const raw = total ? main.getRange(2, 1, total, head.length).getValues() : [];
+  const k = head.map(key_);
+  const at = name => k.indexOf(name);
+  const iT = at('Timestamp'), iS = at('SiteID'), iF = at('Family'), iQ = at('Qty');
+  const iY = at('Type');
+  const old = [], keep = [];
+  raw.forEach(r => ((r[iT] instanceof Date && r[iT] < cutoff) ? old : keep).push(r));
+  // Earlier carried-forward lines are folded into the new totals but not archived (the archive holds only real movements)
+  const originals = old.filter(r => String(r[iY]) !== 'CARRIED_FORWARD');
+
+  const sums = {};
+  old.forEach(r => {
+    const key = String(r[iS]) + '|' + String(r[iF]);
+    const s = sums[key] = sums[key] || { site: String(r[iS]), family: String(r[iF]), qty: 0, n: 0, last: r[iT] };
+    s.qty += Number(r[iQ]) || 0;
+    if (String(r[iY]) !== 'CARRIED_FORWARD') s.n++;
+    if (r[iT] > s.last) s.last = r[iT];
+  });
+  const batch = Utilities.getUuid();
+  const carried = Object.keys(sums).map(key => sums[key]).filter(s => s.qty !== 0).map(s => {
+    const o = {
+      MovementID: Utilities.getUuid(), Timestamp: s.last, SiteID: s.site, Family: s.family, ExactCode: s.family, Qty: s.qty,
+      Type: 'CARRIED_FORWARD', JobNo: '', By: 'Archive', Role: 'admin', Device: 'Archive',
+      Note: 'Carried forward: older movements are in the archive spreadsheet (' + s.n + ' more this time)', BatchID: batch
+    };
+    return k.map(h => (o[h] === undefined ? '' : o[h]));
+  });
+  return { keepDays: keepDays, cutoff: cutoff, head: head, total: total, old: originals.length ? old : [], originals: originals, keep: originals.length ? keep : raw, carried: originals.length ? carried : [] };
+}
+
+function logArchivePlan_(p) {
+  const tz = Session.getScriptTimeZone();
+  console.log('Movements tab: ' + p.total + ' row(s). Keeping everything from ' + Utilities.formatDate(p.cutoff, tz, 'd MMM yyyy HH:mm') +
+    ' (' + p.keepDays + ' day(s), ArchiveKeepDays on the Settings tab) in full.');
+  if (!p.old.length) { console.log('Nothing older than that to archive.'); return; }
+  console.log(p.originals.length + ' older movement(s) go to the archive spreadsheet; with any earlier carried-forward lines they become ' + p.carried.length +
+    ' carried-forward line(s). The Movements tab goes from ' + p.total + ' to ' + (p.carried.length + p.keep.length) + ' row(s). Stock stays the same.');
+}
+
+/** Total stock for every site/van and part, keyed "site|part". */
+function stockTotals_() {
+  const out = {};
+  movementColumns_().forEach(m => { const k = m.site + '|' + m.family; out[k] = (out[k] || 0) + m.qty; });
+  Object.keys(out).forEach(k => { if (!out[k]) delete out[k]; });
+  return out;
+}
+
+/** The archive spreadsheet named on the Settings tab, or a new one (its link is then saved there). */
+function archiveBook_() {
+  const row = readTable_('Settings').find(r => String(r.Setting).trim() === 'ArchiveSheet');
+  const url = row ? String(row.Value || '').trim() : '';
+  if (url) return SpreadsheetApp.openByUrl(url);
+  const book = SpreadsheetApp.create(spreadsheet_().getName() + ' - archive');
+  if (row) sheet_('Settings').getRange(row._row, col_('Settings', 'Value')).setValue(book.getUrl());
+  else appendObjects_('Settings', [{ Setting: 'ArchiveSheet', Value: book.getUrl(), Notes: 'The archive spreadsheet.' }]);
+  return book;
+}
+
 function runSampleData() {
   loadSampleData_();
   console.log('Sample data added. Test PINs: engineer 1111, admin 9999. Delete the sample rows before going live.');
@@ -157,6 +276,12 @@ function runHashPins() {
 
 function setupSheets_() {
   const ss = spreadsheet_();
+  // A missing Movements tab means all stock history is gone: never quietly replace it with an empty one
+  const sites = ss.getSheetByName('Sites');
+  if (!ss.getSheetByName('Movements') && sites && sites.getLastRow() > 1) {
+    throw new Error('The Movements tab is missing but there are sites. An empty one would set all stock to zero, so setup has stopped. ' +
+      'Restore it first: Edit > Undo, or File > Version history > See version history, pick a version from before it went, and Restore.');
+  }
   Object.keys(SHEETS).forEach(name => {
     let sh = ss.getSheetByName(name);
     if (!sh) sh = ss.insertSheet(name);
@@ -185,6 +310,7 @@ function setupSheets_() {
   addMissingSettings_();
   addSmallKits_();
   addNameLookups_();
+  protectMovements_();
 }
 
 /**
@@ -208,6 +334,16 @@ function addNameLookups_() {
       ',Parts!' + pCode + '2:' + pCode + ',Parts!' + pName + '2:' + pName + '),"Not in Parts tab")))}');
     sh.getRange(1, name).setFontWeight('bold');
   });
+}
+
+/**
+ * Puts a warning on the Movements tab: editing or deleting it asks "are you sure?" first. Stock is worked out from
+ * these rows, so losing them would reset every site. The app is not affected (it runs as the Sheet's owner).
+ */
+function protectMovements_() {
+  const sh = sheet_('Movements');
+  if (sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) return;
+  sh.protect().setDescription('Stock history: Parts Tracker works out all stock from these rows. Do not edit or delete.').setWarningOnly(true);
 }
 
 /** Adds any Settings rows that are missing, with their default value and a note. Existing values are kept. */

@@ -611,6 +611,48 @@
     fillKitStock();
     check('running it again adds nothing', rows('Movements').length === movesAfter);
     check('filling kits does not trigger the kit email', sendDailyKitReport() === 0 && mail.length === 0);
+
+    // ---- Safeguards on the Movements tab ----
+    const mvSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Movements');
+    runSetup();
+    check('setup puts one warning-only protection on Movements', mvSheet.getProtections().length === 1 && mvSheet.getProtections()[0].warningOnly === true);
+    delete window.__gas.sheets.Movements;
+    let setupErr = '', appErr = '';
+    try { runSetup(); } catch (e) { setupErr = String(e.message); }
+    try { sheet_('Movements'); } catch (e) { appErr = String(e.message); }
+    check('a deleted Movements tab is never replaced with an empty one', /Version history/.test(setupErr) && !window.__gas.sheets.Movements && /Version history/.test(appErr), setupErr);
+    window.__gas.sheets.Movements = mvSheet;
+
+    // ---- Archive old movements: stock must not change ----
+    const tsCol = col_('Movements', 'Timestamp'), mvTotal = mvSheet.getLastRow() - 1;
+    const longAgo = new Date(Date.now() - 400 * 86400000);
+    for (let r = 2; r <= mvTotal - 4; r++) mvSheet.getRange(r, tsCol).setValue(new Date(longAgo.getTime() + r * 1000));   // all but the last 5 are 400 days old
+    const recent5 = rows('Movements').slice(-5).map(m => m.MovementID);
+    const stockBeforeArchive = JSON.stringify(stockTotals_());
+    installDailyReport(); window.__gas.props.kitReportUpTo = String(longAgo.getTime() - 86400000);
+    check('movements the kit email has not reported are never archived', archivePlan_().old.length === 0);
+    removeDailyReport();
+    previewArchive();
+    check('archive preview changes nothing', rows('Movements').length === mvTotal && JSON.stringify(stockTotals_()) === stockBeforeArchive);
+    const plan = archivePlan_();
+    archiveMovements();
+    const book = Object.values(window.__gas.books)[0];
+    const archived = book && book.getSheetByName('Movements');
+    check('old movements copied to a new archive spreadsheet, linked on the Settings tab', archived && archived.getLastRow() - 1 === mvTotal - 5 &&
+      rows('Settings').find(r => r.Setting === 'ArchiveSheet').Value === book.getUrl(), archived && archived.getLastRow());
+    check('every stock level is unchanged after archiving', JSON.stringify(stockTotals_()) === stockBeforeArchive);
+    const mvAfter = rows('Movements');
+    check('Movements is now carried-forward lines then the recent 5, in order', mvAfter.length === plan.carried.length + 5 && mvAfter.length < mvTotal &&
+      mvAfter.slice(0, -5).every(m => m.Type === 'CARRIED_FORWARD' && m.Qty !== 0) && JSON.stringify(mvAfter.slice(-5).map(m => m.MovementID)) === JSON.stringify(recent5), [mvAfter.length, plan.carried.length, mvTotal]);
+    const archivedCount = archived.getLastRow();
+    archiveMovements();
+    check('running the archive again does nothing', rows('Movements').length === mvAfter.length && archived.getLastRow() === archivedCount && JSON.stringify(stockTotals_()) === stockBeforeArchive);
+    // A year later: new old movements are archived, the carried-forward lines are folded in but never archived twice
+    for (let r = mvAfter.length - 3; r <= mvAfter.length + 1; r++) mvSheet.getRange(r, tsCol).setValue(new Date(longAgo.getTime() + 999000 + r));
+    archiveMovements();
+    check('a second archive adds only real movements to the archive and keeps stock', archived.getLastRow() === archivedCount + 5 &&
+      JSON.stringify(stockTotals_()) === stockBeforeArchive && rows('Movements').every(m => m.Type === 'CARRIED_FORWARD'), archived.getLastRow() - archivedCount);
+    check('archive spreadsheet holds no carried-forward lines', archived.getDataRange().getValues().slice(1).every(r => !r.includes('CARRIED_FORWARD')));
   } catch (e) {
     check('test run crashed', false, String(e && e.stack || e));
   }

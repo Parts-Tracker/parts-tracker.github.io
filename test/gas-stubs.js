@@ -56,6 +56,10 @@
     }
     setFrozenRows() {}
     deleteRow(r) { this.data.splice(r - 1, 1); }
+    deleteRows(r, n) { this.data.splice(r - 1, n); }
+    setName(n) { this.name = n; return this; }
+    protect() { const p = { description: '', warningOnly: false, setDescription(d) { this.description = d; return this; }, setWarningOnly(w) { this.warningOnly = w; return this; } }; this.protections = (this.protections || []).concat(p); return p; }
+    getProtections() { return (this.protections || []).slice(); }
   }
 
   const sheets = {};
@@ -65,7 +69,16 @@
     insertSheet: n => (sheets[n] = new Sheet(n)),
     getSheets: () => Object.values(sheets)
   };
-  window.SpreadsheetApp = { getActiveSpreadsheet: () => spreadsheet, openById: () => spreadsheet, getUi: () => ({ alert() {}, createMenu() { return { addItem() { return this; }, addSeparator() { return this; }, addToUi() {} }; } }) };
+  spreadsheet.getUrl = () => 'https://docs.google.com/spreadsheets/d/main/edit';
+  // Other spreadsheets made by the script (the archive), by URL
+  const books = {};
+  function newBook(name) {
+    const tabs = { Sheet1: new Sheet('Sheet1') };
+    const url = 'https://docs.google.com/spreadsheets/d/book' + Object.keys(books).length + '/edit';
+    return (books[url] = { name, tabs, getName: () => name, getUrl: () => url, getSheetByName: n => Object.values(tabs).find(t => t.name === n) || null, getSheets: () => Object.values(tabs) });
+  }
+  window.SpreadsheetApp = { ProtectionType: { SHEET: 'SHEET', RANGE: 'RANGE' }, create: newBook, openByUrl: u => books[u] || (u === spreadsheet.getUrl() ? spreadsheet : null),
+    getActiveSpreadsheet: () => spreadsheet, openById: () => spreadsheet, getUi: () => ({ alert() {}, createMenu() { return { addItem() { return this; }, addSeparator() { return this; }, addToUi() {} }; } }) };
 
   // Simple consistent hash -> 32 signed bytes
   function fakeHash(str) {
@@ -122,5 +135,5 @@
   window.PropertiesService = { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) };
   window.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: s => ({ setMimeType() { return this; }, getContent: () => s }) };
 
-  window.__gas = { sheets, cache, props, sentMail, triggers };
+  window.__gas = { sheets, books, cache, props, sentMail, triggers };
 })();
