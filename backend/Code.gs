@@ -796,6 +796,17 @@ function settings_() {
   return out;
 }
 
+/**
+ * The ReportHour setting as a whole hour 0-23. Accepts 20, "20", "20:00", or a Sheets time cell: Sheets turns "20:00"
+ * into a time-of-day date in 1899, whose old London offset can make it read 19:58:45, so round to the nearest hour.
+ */
+function reportHour_(v) {
+  let h;
+  if (v instanceof Date) h = Math.round(v.getHours() + v.getMinutes() / 60 + v.getSeconds() / 3600) % 24;
+  else h = parseInt(String(v).trim(), 10);
+  return isNaN(h) ? 18 : Math.min(23, Math.max(0, h));
+}
+
 /** Where the daily email goes. */
 function reportEmail_(cfg) {
   const admin = readTable_('Users').find(u => isTrue_(u.Active) && String(u.Role).toLowerCase() === 'admin' && u.Email) || {};
@@ -906,7 +917,7 @@ function kitReportHtml_(usage, cfg, title) {
 }
 
 /**
- * Sends the kit report for everything used since the last report (first run: since midnight).
+ * Sends the kit report for everything used since the last report (first run: the last 24 hours).
  * Run daily by the trigger that installDailyReport sets up. Sends nothing on a day with no kit use.
  */
 function sendDailyKitReport() {
@@ -914,7 +925,7 @@ function sendDailyKitReport() {
   const now = new Date();
   const tz = Session.getScriptTimeZone();
   const last = Number(props.getProperty('kitReportUpTo')) || 0;
-  const from = last ? new Date(last) : new Date(Utilities.formatDate(now, tz, "yyyy-MM-dd'T'00:00:00XXX"));
+  const from = new Date(last || now.getTime() - 86400000);
   const sent = sendKitReport_(from, now, 'Kit parts used ' + Utilities.formatDate(from, tz, 'EEE d MMM HH:mm') + ' to ' + Utilities.formatDate(now, tz, 'EEE d MMM HH:mm'), false);
   props.setProperty('kitReportUpTo', String(now.getTime()));
   return sent;

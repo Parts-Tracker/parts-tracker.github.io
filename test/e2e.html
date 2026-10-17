@@ -435,6 +435,11 @@
     check('test email always sends, marked TEST', mail.length === 1 && /^\[TEST\]/.test(mail[0].subject) && /Demo Graphics/.test(mail[0].htmlBody));
     installDailyReport(); installDailyReport();
     check('daily email trigger installed once at 18:00', window.__gas.triggers.length === 1 && window.__gas.triggers[0].hour === 18 && window.__gas.triggers[0].fn === 'sendDailyKitReport');
+    const hourCell = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings').getRange(rows('Settings').find(r => r.Setting === 'ReportHour')._row, 2);
+    hourCell.setValue(new Date(1899, 11, 30, 20, 0)); installDailyReport();
+    check('ReportHour typed as 20:00 (a Sheets time) gives 20', window.__gas.triggers.length === 1 && window.__gas.triggers[0].hour === 20, window.__gas.triggers[0] && window.__gas.triggers[0].hour);
+    check('ReportHour read as 19:58:45 (old London offset), "20:00", 20 or junk', reportHour_(new Date(1899, 11, 30, 19, 58, 45)) === 20 && reportHour_('20:00') === 20 && reportHour_(20) === 20 && reportHour_('x') === 18 && reportHour_(0) === 0);
+    hourCell.setValue(18);
     removeDailyReport();
     check('daily email can be turned off', window.__gas.triggers.length === 0);
 

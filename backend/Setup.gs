@@ -56,10 +56,10 @@ function runSetup() {
 function installDailyReport() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'sendDailyKitReport').forEach(t => ScriptApp.deleteTrigger(t));
   const cfg = settings_();
-  const hour = Math.min(23, Math.max(0, Math.floor(Number(cfg.ReportHour)) || 18));
+  const hour = reportHour_(cfg.ReportHour);
   ScriptApp.newTrigger('sendDailyKitReport').timeBased().everyDays(1).atHour(hour).create();
   const to = reportEmail_(cfg);
-  console.log('Daily Up Time Kit email is on: sent around ' + hour + ':00 each day to ' + (to || '(no address: fill in ReportEmail on the Settings tab)') + ', only on days a kit part is used.');
+  console.log('Daily Up Time Kit email is on: sent between ' + hour + ':00 and ' + hour + ':59 each day to ' + (to || '(no address: fill in ReportEmail on the Settings tab)') + ', only on days a kit part is used.');
 }
 
 /** Sends a test email now with the kit parts used in the last 7 days (marked TEST). Does not affect the daily email. */
