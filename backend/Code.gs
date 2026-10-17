@@ -16,7 +16,13 @@ const SHEET_ID = '';
 // Column headings as people see them in the Sheet -> the name the code uses.
 // "Part Number" holds the family code (e.g. P053K0667X); sheets made before the rename still say "Family".
 const HEADER_KEYS = { 'Part Number': 'Family', 'No kit': 'NoKit' };
-const key_ = h => HEADER_KEYS[h] || h;
+// Headings are matched ignoring case and spaces, so "No Kit" or "No kit " still work
+const HEADER_KEYS_LOOSE = {};
+Object.keys(HEADER_KEYS).forEach(h => { HEADER_KEYS_LOOSE[h.toLowerCase().replace(/\s+/g, '')] = HEADER_KEYS[h]; });
+Object.keys(HEADER_KEYS).forEach(h => { HEADER_KEYS_LOOSE[HEADER_KEYS[h].toLowerCase()] = HEADER_KEYS[h]; });
+const key_ = h => { const t = String(h).trim(); return HEADER_KEYS_LOOSE[t.toLowerCase().replace(/\s+/g, '')] || t; };
+/** Printers "No kit": anything typed (TRUE, yes, x, a tick) except blank, FALSE, no or 0. */
+const noKit_ = p => { const v = String(p.NoKit == null ? '' : p.NoKit).trim(); return v !== '' && !/^(false|no|n|0)$/i.test(v); };
 
 const SHEETS = {
   Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Token', 'Active', 'LastCount'],   // no customer contact details are kept
@@ -302,7 +308,7 @@ function actionAdmin(req) {
   });
   const machines = {};
   readTable_('Printers').forEach(p => {
-    (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || ''), noKit: isTrue_(p.NoKit) });
+    (machines[String(p.SiteID)] = machines[String(p.SiteID)] || []).push({ row: p._row, model: String(p.Model), serial: String(p.Serial || ''), noKit: noKit_(p) });
   });
   // Closed sites are included (active: false) so they can be reopened
   const sites = readTable_('Sites').filter(s => s.Name);
@@ -457,7 +463,7 @@ function actionMachineMove(req) {
 
 function moveKitStock_(user, machine, from, to) {
   const model = cleanModel_(machine.Model);
-  const kit = isTrue_(machine.NoKit) ? {} : kitsByModel_()[model] || {};
+  const kit = noKit_(machine) ? {} : kitsByModel_()[model] || {};
   const held = stockBySite_(from.SiteID);
   const names = partNames_(readTable_('Parts'));
   const lines = Object.keys(kit).map(f => ({ family: f, qty: Math.min(held[f] || 0, kit[f] || held[f] || 0) })).filter(l => l.qty > 0);
@@ -822,7 +828,7 @@ function kitUsage_(from, to) {
   readTable_('Sites').forEach(s => { sites[String(s.SiteID)] = s; });
   const models = {};
   readTable_('Printers').forEach(p => {
-    if (isTrue_(p.NoKit)) return;   // e.g. a training machine
+    if (noKit_(p)) return;   // e.g. a training machine
     const list = models[String(p.SiteID)] = models[String(p.SiteID)] || [];
     const m = String(p.Model).trim().toUpperCase();
     if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once

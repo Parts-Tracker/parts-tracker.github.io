@@ -595,6 +595,15 @@
     check('a machine ticked No kit gets no kit', Object.keys(stockBySite_('S1999')).length === 0);
     const trainAdmin = actionAdmin({ session: call({ action: 'login', site: 'admin', pin: '9999' }).session }).sites.find(x => x.id === 'S1999');
     check('admins see the training machine as no kit', trainAdmin && trainAdmin.machines[0].noKit === true);
+    // Headings typed differently and other ways of ticking still count
+    const prSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Printers');
+    prSheet.getRange(1, col_('Printers', 'NoKit')).setValue('No Kit ');
+    const trainRow = rows('Printers').find(p => p.SiteID === 'S1999')._row;
+    const tickedAs = v => { prSheet.getRange(trainRow, col_('Printers', 'NoKit')).setValue(v); return kitTopUp_().some(k => k.site.SiteID === 'S1999'); };
+    check('No kit works with heading "No Kit " and values x, Yes, ✓, true', !tickedAs('x') && !tickedAs('Yes') && !tickedAs('✓') && !tickedAs(true) && tickedAs(false) && tickedAs(''), rows('Printers').find(p => p.SiteID === 'S1999'));
+    tickedAs(true);
+    const prCols = prSheet.getLastColumn(); runSetup();
+    check('setup does not add a second No kit column', prSheet.getLastColumn() === prCols);
     appendObjects_('Movements', [{ MovementID: 'x1', Timestamp: new Date(), SiteID: 'S1999', Family: 'P059K6158X', ExactCode: 'P059K6158X', Qty: -1, Type: 'USED', By: 'T', Role: 'engineer' }]);
     check('parts used on a No kit machine are left out of the kit email', !kitUsage_(new Date(Date.now() - 60000), new Date(Date.now() + 1000)).some(u => u.site.SiteID === 'S1999'));
     appendObjects_('Movements', [{ MovementID: 'x2', Timestamp: new Date(), SiteID: 'S1999', Family: 'P059K6158X', ExactCode: 'P059K6158X', Qty: 1, Type: 'COUNT', By: 'T', Role: 'engineer' }]);

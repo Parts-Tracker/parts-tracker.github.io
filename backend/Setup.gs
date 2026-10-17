@@ -82,6 +82,10 @@ function removeDailyReport() {
  */
 function previewKitStock() {
   const plan = kitTopUp_();
+  const printers = readTable_('Printers');
+  const ticked = printers.filter(noKit_);
+  if (!printers.length || !('NoKit' in printers[0])) console.log('No "No kit" column found on the Printers tab. Run runSetup, or add a heading called No kit.');
+  else console.log(ticked.length ? 'Ticked No kit (left out): ' + ticked.map(p => p.Model + (p.Serial ? ' ' + p.Serial : '') + ' at ' + p.SiteID).join(', ') : 'No machines are ticked No kit.');
   logKitPlan_(plan, 'Would add');
   console.log('Nothing has been changed. Run fillKitStock to add this stock.');
 }
@@ -111,7 +115,7 @@ function kitTopUp_() {
   const kits = kitsByModel_();
   const models = {};
   readTable_('Printers').forEach(p => {
-    if (isTrue_(p.NoKit)) return;   // marked No kit on the Printers tab, e.g. a training machine
+    if (noKit_(p)) return;   // marked No kit on the Printers tab, e.g. a training machine
     const m = cleanModel_(p.Model), id = String(p.SiteID);
     const list = models[id] = models[id] || [];
     if (m && kits[m] && list.indexOf(m) < 0) list.push(m);
@@ -165,8 +169,8 @@ function setupSheets_() {
       // at the end, leaving existing data alone
       const first = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
       first.forEach((h, j) => { if (h === 'Family') sh.getRange(1, j + 1).setValue('Part Number'); });
-      const have = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
-      head.filter(h => have.indexOf(h) < 0).forEach(h => {
+      const have = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => key_(String(h)));
+      head.filter(h => have.indexOf(key_(h)) < 0).forEach(h => {
         sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold');
       });
     }
