@@ -258,6 +258,20 @@ function archiveBook_() {
   return book;
 }
 
+/** Builds every active engineer's My van data as the app would, and logs any error. For fault finding. */
+function checkVans() {
+  readTable_('Users').filter(u => isTrue_(u.Active) && /^(engineer|admin)$/i.test(String(u.Role))).forEach(u => {
+    try {
+      const v = vanData_(u, '');
+      const text = JSON.stringify(v);
+      console.log('OK ' + u.UserID + ' ' + u.Name + ': ' + v.stock.length + ' stock line(s), ' + v.recent.length + ' recent, ' + v.kit.length + ' kit part(s), ' +
+        Math.round(text.length / 1024) + ' KB. Recent types: ' + v.recent.map(r => r.type + (r.at ? '' : ' (no time)')).join(', '));
+    } catch (e) {
+      console.log('ERROR ' + u.UserID + ' ' + u.Name + ': ' + (e && e.stack || e));
+    }
+  });
+}
+
 function runSampleData() {
   loadSampleData_();
   console.log('Sample data added. Test PINs: engineer 1111, admin 9999. Delete the sample rows before going live.');

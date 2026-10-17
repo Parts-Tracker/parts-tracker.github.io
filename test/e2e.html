@@ -652,6 +652,15 @@
     archiveMovements();
     check('a second archive adds only real movements to the archive and keeps stock', archived.getLastRow() === archivedCount + 5 &&
       JSON.stringify(stockTotals_()) === stockBeforeArchive && rows('Movements').every(m => m.Type === 'CARRIED_FORWARD'), archived.getLastRow() - archivedCount);
+    // My van still opens once the van's history has been archived
+    const vanAfterArchive = call({ action: 'van', session: A.state.session });
+    checkVans();
+    check('van loads after its history is archived', vanAfterArchive.ok && Array.isArray(vanAfterArchive.stock), 'ok=' + vanAfterArchive.ok + ' err=' + vanAfterArchive.error + ' code=' + vanAfterArchive.code + ' stock=' + (vanAfterArchive.stock || []).length + ' session=' + !!A.state.session);
+    $('doneHome') && $('doneHome').click();
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    await sleep(50);
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    check('My van opens after archiving', await waitFor(() => visible('view-van') && $('vanName').textContent === 'Test Engineer'), [visible('view-van'), $('vanName').textContent, $('whereSwitch').hidden, document.querySelector('#whereSwitch [data-where=van]').disabled]);
     check('archive spreadsheet holds no carried-forward lines', archived.getDataRange().getValues().slice(1).every(r => !r.includes('CARRIED_FORWARD')));
   } catch (e) {
     check('test run crashed', false, String(e && e.stack || e));

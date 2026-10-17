@@ -273,6 +273,10 @@ function vanKit_() {
 function actionVan(req) {
   const user = sessionUser_(req.session, false);
   if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
+  return vanData_(user, req.partsVersion);
+}
+
+function vanData_(user, partsVersion) {
   const loc = vanId_(user);
   const parts = readTable_('Parts');
   const names = partNames_(parts);
@@ -285,7 +289,7 @@ function actionVan(req) {
     partsVersion: partsVersion_(parts),
     user: { name: user.Name, role: user.Role }
   };
-  if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
+  if (partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
   return out;
 }
 
