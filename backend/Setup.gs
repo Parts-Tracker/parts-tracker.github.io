@@ -77,15 +77,21 @@ function previewKitStock() {
   const ticked = printers.filter(noKit_);
   if (!printers.length || !('NoKit' in printers[0])) console.log('No "No kit" column found on the Printers tab. Run runSetup, or add a heading called No kit.');
   else console.log(ticked.length ? 'Ticked No kit (left out): ' + ticked.map(p => p.Model + (p.Serial ? ' ' + p.Serial : '') + ' at ' + p.SiteID).join(', ') : 'No machines are ticked No kit.');
-  logKitPlan_(plan, 'Would add');
-  console.log('Nothing has been changed. Run fillKitStock to add this stock.');
+  logKitPlan_(plan, true);
+  console.log('Nothing has been changed. Run fillKitStock to do this.');
 }
 
+// Rows written by fillKitStock carry this in By, so it can tell its own assumed stock from real deliveries
+const KIT_SETUP_BY = 'Kit setup';
+
 /**
- * Gives every open site a full Up Time Kit for each kit machine it has (two SC180s = two kits;
- * machines ticked No kit on the Printers tab are left out),
- * assuming it is all there until an engineer counts it on site. Parts already held are topped up, not doubled,
- * so running it again adds nothing. Recorded as BOOK_IN, which the daily kit email ignores.
+ * Brings the ASSUMED stock at every open site that has never been counted to exactly a full Up Time Kit for each
+ * kit machine there (two SC180s = two kits; machines ticked No kit on the Printers tab are left out):
+ * - parts below the kit are topped up (recorded as BOOK_IN, "not yet checked on site");
+ * - parts above the kit (e.g. after a kit quantity on the Kits tab is lowered) are taken back, but only as far as
+ *   this function added them itself (KIT_ADJUST), so real deliveries are never removed.
+ * Sites that have been counted are never touched: their stock is real. Running it again changes nothing.
+ * The daily kit email ignores both kinds of row.
  */
 function fillKitStock() {
   withLock_(() => {
@@ -94,14 +100,18 @@ function fillKitStock() {
     const rows = [];
     plan.forEach(p => p.lines.forEach(l => rows.push({
       MovementID: Utilities.getUuid(), Timestamp: now, SiteID: p.site.SiteID, Family: l.family, ExactCode: l.family, Qty: l.qty,
-      Type: 'BOOK_IN', JobNo: '', By: 'Kit setup', Role: 'admin', Device: 'Setup', Note: 'Assumed full kit, not yet checked on site', BatchID: batch
+      Type: l.qty > 0 ? 'BOOK_IN' : 'KIT_ADJUST', JobNo: '', By: KIT_SETUP_BY, Role: 'admin', Device: 'Setup',
+      Note: l.qty > 0 ? 'Assumed full kit, not yet checked on site' : 'Kit list corrected: assumed stock above the kit taken back', BatchID: batch
     })));
     if (rows.length) appendObjects_('Movements', rows);
-    logKitPlan_(plan, 'Added');
+    logKitPlan_(plan, false);
   });
 }
 
-/** For each open site: the kit parts it should hold and how many to add to reach a full kit. */
+/**
+ * For each open site never counted that has kit machines (or assumed kit stock): what to add or take back so its
+ * assumed stock matches the kit. lines: [{ family, qty }], qty > 0 adds, qty < 0 takes back.
+ */
 function kitTopUp_() {
   const kits = kitsByModel_();
   const machines = {};   // site -> { MODEL: how many kit machines }
@@ -112,22 +122,41 @@ function kitTopUp_() {
     const at = machines[id] = machines[id] || {};
     at[m] = (at[m] || 0) + 1;   // each machine has its own kit
   });
-  const held = stockAll_();
-  return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && machines[String(s.SiteID)]).map(s => {
-    const id = String(s.SiteID), want = {}, at = machines[id];
+  const moves = movementColumns_();
+  const held = stockAll_(moves);
+  const assumed = {};   // site -> { family: net qty this function has added there }
+  moves.forEach(m => {
+    if (String(m.row.By) !== KIT_SETUP_BY) return;
+    const a = assumed[m.site] = assumed[m.site] || {};
+    a[m.family] = (a[m.family] || 0) + m.qty;
+  });
+  return readTable_('Sites').filter(s => s.SiteID && isTrue_(s.Active) && !s.LastCount && (machines[String(s.SiteID)] || assumed[String(s.SiteID)])).map(s => {
+    const id = String(s.SiteID), want = {}, at = machines[id] || {};
     Object.keys(at).forEach(m => Object.keys(kits[m]).forEach(f => { want[f] = (want[f] || 0) + kits[m][f] * at[m]; }));
-    const have = held[id] || {};
-    const lines = Object.keys(want).map(f => ({ family: f, qty: want[f] - (have[f] || 0) })).filter(l => l.qty > 0);
+    const have = held[id] || {}, mine = assumed[id] || {};
+    const lines = [];
+    Object.keys(Object.assign({}, want, mine)).forEach(f => {
+      const diff = (want[f] || 0) - (have[f] || 0);
+      if (diff > 0) lines.push({ family: f, qty: diff });
+      else if (diff < 0 && (mine[f] || 0) > 0) lines.push({ family: f, qty: -Math.min(-diff, mine[f]) });
+    });
     return { site: s, models: Object.keys(at).map(m => at[m] > 1 ? at[m] + ' x ' + m : m), lines: lines };
   });
 }
 
-function logKitPlan_(plan, verb) {
+function logKitPlan_(plan, preview) {
   const busy = plan.filter(p => p.lines.length);
-  busy.forEach(p => console.log(verb + ' ' + p.lines.reduce((n, l) => n + l.qty, 0) + ' item(s), ' + p.lines.length + ' part(s): ' +
-    p.site.Name + ' (' + p.site.SiteID + ', ' + p.models.join(', ') + ')'));
-  const items = busy.reduce((n, p) => n + p.lines.reduce((m, l) => m + l.qty, 0), 0);
-  console.log(verb + ' ' + items + ' item(s) at ' + busy.length + ' site(s). ' + (plan.length - busy.length) + ' kit site(s) already had a full kit.');
+  const sum = (lines, sign) => lines.filter(l => Math.sign(l.qty) === sign).reduce((n, l) => n + Math.abs(l.qty), 0);
+  const words = (add, take) => [add ? (preview ? 'add ' : 'added ') + add : '', take ? (preview ? 'take back ' : 'took back ') + take : ''].filter(Boolean).join(', ') + ' item(s)';
+  busy.forEach(p => {
+    const text = words(sum(p.lines, 1), sum(p.lines, -1));
+    console.log((preview ? 'Would ' + text : text.charAt(0).toUpperCase() + text.slice(1)) + ': ' +
+      p.site.Name + ' (' + p.site.SiteID + (p.models.length ? ', ' + p.models.join(', ') : '') + ')');
+  });
+  const all = [].concat.apply([], busy.map(p => p.lines));
+  const total = words(sum(all, 1), sum(all, -1));
+  console.log((!busy.length ? 'Nothing to change. ' : (preview ? 'Would ' + total : total.charAt(0).toUpperCase() + total.slice(1)) + ' at ' + busy.length + ' site(s). ') +
+    (plan.length - busy.length) + ' site(s) not yet counted already match the kit. Sites that have been counted are left as counted.');
 }
 
 // ---- Archive old movements: keeps the Movements tab small without changing any stock

@@ -52,7 +52,7 @@ Pick the function next to **Run**, click **Run**, and read the Execution log.
 |---|---|
 | `runSetup` | Creates missing tabs, columns and settings; protects Movements. Safe to run again. |
 | `installDailyReport` | Turns on the daily Up Time Kit email at the Settings tab's ReportHour (run again after changing the hour). `removeDailyReport` turns it off; `testDailyKitReport` sends a test now. |
-| `previewKitStock` / `fillKitStock` | Shows / adds an assumed full Up Time Kit for every kit machine at open sites (one kit per machine, topped up, never doubled). |
+| `previewKitStock` / `fillKitStock` | Shows / brings the assumed stock at open sites **not yet counted** to a full Up Time Kit per kit machine: tops up, and after a kit quantity is lowered takes back only what it added itself. Counted sites are never touched. |
 | `previewArchive` / `archiveMovements` | Shows / moves movements older than ArchiveKeepDays to an archive spreadsheet, replaced by carried-forward totals. Checks every stock level is unchanged. |
 | `runSiteTokens`, `runHashPins` | The same as the Sheet menu items. |
 

@@ -713,7 +713,7 @@
     check('kit preview changes nothing', rows('Movements').length === movesBefore);
     sendDailyKitReport(); mail.length = 0;
     fillKitStock();
-    check('every open kit site now holds at least a full kit', kitSites.length > 0 && kitSites.filter(s => s.SiteID !== 'S1001').every(s => { const st = stockBySite_(s.SiteID), w = fullKit(s); return Object.keys(w).every(f => (st[f] || 0) >= w[f]); }));
+    check('every open kit site not yet counted now holds at least a full kit', kitSites.filter(s => s.SiteID !== 'S1001' && !s.LastCount).length > 0 && kitSites.filter(s => s.SiteID !== 'S1001' && !s.LastCount).every(s => { const st = stockBySite_(s.SiteID), w = fullKit(s); return Object.keys(w).every(f => (st[f] || 0) >= w[f]); }));
     const twoSc = kitSites.find(s => rows('Printers').filter(p => String(p.SiteID) === String(s.SiteID) && cleanModel_(p.Model) === 'SC180').length === 2);
     check('a site with two SC180s gets two small kits', twoSc && stockBySite_(twoSc.SiteID)['P859K4874X'] >= 2 + (rows('Printers').some(p => String(p.SiteID) === String(twoSc.SiteID) && cleanModel_(p.Model) === 'EC1100') ? 1 : 0), twoSc && stockBySite_(twoSc.SiteID));
     check('assumed kit stock is a BOOK_IN marked not yet checked', rows('Movements').slice(movesBefore).length > 0 && rows('Movements').slice(movesBefore).every(m => m.Type === 'BOOK_IN' && /not yet checked/.test(m.Note) && m.Qty > 0));
@@ -737,6 +737,33 @@
     fillKitStock();
     check('running it again adds nothing', rows('Movements').length === movesAfter);
     check('filling kits does not trigger the kit email', sendDailyKitReport() === 0 && mail.length === 0);
+
+    // ---- A kit quantity lowered on the Kits tab: only assumed stock is taken back, never at counted sites ----
+    const kitsTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Kits');
+    const scBtr = rows('Kits').find(k => cleanModel_(k.Model) === 'SC180' && k.Family === 'P859K4874X');
+    const dg = rows('Sites').find(s => s.Name === 'Demo Graphics Ltd');
+    const machinesAt = model => rows('Printers').filter(p => String(p.SiteID) === String(dg.SiteID) && !noKit_(p) && cleanModel_(p.Model) === model).length;
+    appendObjects_('Movements', [{ MovementID: 'real-btr', Timestamp: new Date(), SiteID: dg.SiteID, Family: 'P859K4874X', ExactCode: 'P859K4874X', Qty: 2, Type: 'BOOK_IN', By: 'Customer', Role: 'customer' }]);
+    const btrBefore = stockOf(dg.SiteID, 'P859K4874X');
+    const kitAdded = rows('Movements').filter(m => m.SiteID === dg.SiteID && m.Family === 'P859K4874X' && m.By === 'Kit setup').reduce((n, m) => n + Number(m.Qty), 0);
+    kitsTab.getRange(scBtr._row, col_('Kits', 'Qty')).setValue(0);   // as if SC180s no longer carried a 2nd BTR
+    const wantLow = machinesAt('EC1100');
+    setLastCount(dg, new Date());
+    const movesCounted = rows('Movements').length;
+    fillKitStock();
+    check('a counted site is never changed by the kit fill', rows('Movements').length === movesCounted);
+    setLastCount(dg, '');
+    fillKitStock();
+    const btrAfter = stockOf(dg.SiteID, 'P859K4874X');
+    check('a lowered kit quantity takes back only the assumed stock, never a real delivery', kitAdded > 0 && btrAfter === btrBefore - Math.min(btrBefore - wantLow, kitAdded) && btrAfter >= 2 &&
+      rows('Movements').some(m => m.Type === 'KIT_ADJUST' && m.SiteID === dg.SiteID && m.Qty < 0 && /Kit list corrected/.test(m.Note)), [btrBefore, kitAdded, wantLow, btrAfter]);
+    const movesFixed = rows('Movements').length;
+    fillKitStock();
+    check('running the correction again changes nothing', rows('Movements').length === movesFixed);
+    kitsTab.getRange(scBtr._row, col_('Kits', 'Qty')).setValue(1);
+    fillKitStock();
+    check('raising it again tops the assumed stock back up', stockOf(dg.SiteID, 'P859K4874X') === Math.max(machinesAt('SC180') + machinesAt('EC1100'), btrAfter), stockOf(dg.SiteID, 'P859K4874X'));
+    check('kit corrections do not trigger the kit email', sendDailyKitReport() === 0 && mail.length === 0);
 
     // ---- Safeguards on the Movements tab ----
     const mvSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Movements');
