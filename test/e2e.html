@@ -592,8 +592,10 @@
     A.openAdmin();
     check('admin opens from the saved copy with no connection', await waitFor(() => /showing the copy saved/.test($('adminSummary').textContent)) && $('adminStats').querySelector('.stat-value').textContent === '2', $('adminSummary').textContent);
     apiDown = false;
+    A.admin.data = null;
     A.openAdmin();
-    await waitFor(() => $('adminSummary').textContent === '');
+    check('admin shows the pink Updating… label on the saved copy', !$('adminUpdating').hidden && getComputedStyle($('adminUpdating')).backgroundColor === 'rgb(224, 53, 108)');
+    check('label goes once the dashboard is up to date', await waitFor(() => $('adminUpdating').hidden && $('adminSummary').textContent === ''));
     [...$('siteList').querySelectorAll('li')].find(li => /New Print Ltd/.test(li.textContent)).click();
     $('siteClose').click();
     sheetBtn('Reopen site').click();

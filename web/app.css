@@ -297,9 +297,8 @@ button.danger:disabled { opacity: 0.6; }
 .tag.current { border-color: var(--accent); color: var(--accent-strong); }
 
 /* "Updating…": shown on a saved copy while the latest figures load */
-.updating { --updating-ink: #E0356C; --updating-bg: #FCEBF0; display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none; vertical-align: 1px; color: var(--updating-ink); background: var(--updating-bg); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .updating { --updating-ink: #FFFFFF; --updating-bg: #E0356C; } }
-:root[data-theme="dark"] .updating { --updating-ink: #FFFFFF; --updating-bg: #E0356C; }
+.updating { --updating-ink: #FFFFFF; --updating-bg: #E0356C; display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none; vertical-align: 1px; color: var(--updating-ink); background: var(--updating-bg); }
+h1 .updating { vertical-align: middle; }
 .updating[hidden] { display: none; }
 .updating::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: updating-pulse 0.9s ease-in-out infinite alternate; }
 @keyframes updating-pulse { from { opacity: 0.25; } to { opacity: 1; } }

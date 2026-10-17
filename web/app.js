@@ -1030,7 +1030,8 @@
   }
 
   async function loadAdmin() {
-    $('adminSummary').textContent = admin.data ? 'Updating…' : 'Loading…';
+    $('adminSummary').textContent = admin.data ? '' : 'Loading…';
+    $('adminUpdating').hidden = !admin.data;   // a saved copy is showing: say it is being brought up to date
     try {
       const r = await api({ action: 'admin', session: state.session });
       if (!r.ok) { $('adminSummary').textContent = r.error; if (r.code === 'session' || r.code === 'forbidden') askPin(loadAdmin, 'Admin sign in'); return; }
@@ -1038,7 +1039,7 @@
     } catch (e) {
       $('adminSummary').textContent = e.code === 'offline'
         ? (admin.data ? 'No connection: showing the copy saved on this phone.' : 'No connection. The dashboard needs signal.') : e.message;
-    }
+    } finally { $('adminUpdating').hidden = true; }
   }
 
   /** Takes in a full set of dashboard data (from loading, or returned by a change) and redraws. */
@@ -1056,7 +1057,7 @@
         admin.bySite[si].push({ family, qty });
       });
       admin.qrBuilt = false;
-      $('adminSummary').textContent = fromSaved ? 'Updating…' : r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
+      $('adminSummary').textContent = fromSaved || r.stock ? '' : 'The Apps Script backend needs updating to show stock here (paste the new Code.gs and deploy a new version).';
       renderAdminStats();
       renderPartResults();
       renderSites();
