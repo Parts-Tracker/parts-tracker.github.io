@@ -1063,7 +1063,7 @@
       window.scrollTo(0, 0);
       done();
       toast('Phew. All put back.');
-    }, ms(5600));
+    }, ms(8600));   // the message stays up for about 5 seconds before everything comes back
   }
 
   // ---------- Find a part (engineers): which engineers' vans and which sites hold it ----------
