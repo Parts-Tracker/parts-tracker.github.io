@@ -32,7 +32,9 @@ const SHEETS = {
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
   Kits: ['Model', 'Part Number', 'Qty', 'Name'],   // Name is a lookup from the Parts tab, filled in by setup
   VanKit: ['Part Number', 'Min', 'Max', 'Name'],   // one van kit for every engineer
-  Settings: ['Setting', 'Value', 'Notes']
+  Settings: ['Setting', 'Value', 'Notes'],
+  // Parts posted to a site from an engineer's van: not stock there until booked in, used or counted (or OnItsWayDays pass)
+  OnItsWay: ['ID', 'Posted', 'SiteID', 'Part Number', 'Qty', 'From', 'FromID', 'JobNo', 'Status', 'Closed', 'Note']
 };
 
 // Which movement types each role may record, and the sign of their quantity.
@@ -45,7 +47,11 @@ const MOVEMENT_TYPES = {
   // Unused parts an engineer takes from a site into their own van; the van's side is recorded as FROM_SITE
   TO_VAN: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true },
   // Unused good parts sent back to Ceva from the engineer's van (dropped at a ByBox)
-  RETURNED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true }
+  RETURNED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true },
+  // Parts an engineer leaves at a site from their own van; the van's side is recorded as TO_SITE
+  FROM_VAN: { sign: 1, roles: ['engineer', 'admin'], heldOnly: true },
+  // Parts posted from the engineer's van to a site (req.toSite): on the OnItsWay tab until they arrive
+  POSTED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true }
 };
 // Note on a USED line for a part that failed on fit: still used (a kit site gets it reordered), kept for a warranty claim
 const FAILED_ON_FIT = 'Failed on fit (warranty)';
@@ -99,6 +105,7 @@ const ACTIONS = {
 /** Everything the app needs for one site: details, printers, stock, recent activity, and the parts list if it changed. */
 function actionBootstrap(req) {
   const site = siteFromToken_(req.site);
+  const waiting = settleOnItsWay_(site.SiteID);   // before reading stock: overdue posted parts count as arrived
   const parts = readTable_('Parts');
   const names = partNames_(parts);
   const moves = movementsAt_(site.SiteID);
@@ -109,6 +116,7 @@ function actionBootstrap(req) {
     stock: stockLines_(sumStock_(moves), names),
     recent: recentMovements_(moves, names, 10),
     recountDays: recountDays_(),
+    onItsWay: waiting.map(w => ({ family: w.Family, name: names[w.Family] || '', qty: w.Qty, by: w.From, at: iso_(w.Posted), jobNo: w.JobNo })),
     partsVersion: partsVersion_(parts)
   };
   if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
@@ -155,7 +163,8 @@ function actionLogin(req) {
  * req: { site, session?, batchId, type, jobNo?, device?, note?, items: [{ code, qty, name?, failed? }], zero?: [family] }
  * For COUNT, items are the counted quantities and `zero` lists families to set to 0.
  * For USED, an item's `failed` is how many of it failed on fit.
- * TO_VAN moves parts from the site into the signed-in engineer's van; RETURNED (van only) sends them back to Ceva.
+ * TO_VAN moves parts from the site into the signed-in engineer's van, FROM_VAN the other way; from the van,
+ * RETURNED sends them back to Ceva and POSTED sends them to req.toSite (a site's QR token), where they are on their way.
  */
 function actionSubmit(req) {
   // A batch is for a site (QR token) or for the signed-in engineer's own van (req.van)
@@ -171,7 +180,8 @@ function actionSubmit(req) {
   if (!spec) throw err_('bad_request', 'Unknown movement type.');
   if (spec.vanOnly && !req.van) throw err_('bad_request', 'That action is only for your van stock.');
   if (spec.roles.indexOf(role) < 0) throw err_('forbidden', 'Only engineers can do that. Sign in with your PIN.');
-  const vanLoc = type === 'TO_VAN' ? vanId_(user) : null;   // where parts taken from a site go
+  const vanLoc = type === 'TO_VAN' || type === 'FROM_VAN' ? vanId_(user) : null;   // the van on the other side of a site batch
+  const dest = type === 'POSTED' ? siteFromToken_(req.toSite) : null;   // where posted parts are going
   const jobNo = String(req.jobNo || '').trim();
   if (spec.needsJob && !jobNo) throw err_('bad_request', 'A job or ticket number is needed for parts used.');
   const batchId = String(req.batchId || '').slice(0, 64);
@@ -224,8 +234,10 @@ function actionSubmit(req) {
     const stockAt = id => sumStock_(moves.filter(m => m.site === String(id)));
     const before = stockAt(locId);
     const vanBefore = vanLoc ? stockAt(vanLoc) : null;
-    const current = Object.assign({}, before);
-    const warnings = [], notHeld = [];
+    const current = Object.assign({}, before), vanCurrent = Object.assign({}, vanBefore || {});
+    const warnings = [], notHeld = [], posted = [];
+    // Parts posted to this site that haven't arrived yet: matched by book-ins, uses and counts here
+    const waiting = site && ['BOOK_IN', 'USED', 'CUSTOMER_FITTED', 'COUNT'].indexOf(type) >= 0 ? onItsWay_(site.SiteID) : [];
     if (type === 'COUNT') {
       // Counted lines set the quantity; families in `zero` are set to 0. Only differences are written.
       const counted = {};
@@ -235,24 +247,39 @@ function actionSubmit(req) {
         const was = current[fam] || 0;
         const delta = counted[fam] - was;
         if (delta !== 0) row(fam, fam, delta, 'counted ' + counted[fam] + ', was ' + was + (note ? '. ' + note : ''));
+        if (counted[fam] > 0) arrived_(waiting, fam, Infinity, 'Found by a count');   // the count already set the stock
       });
       if (site) setSiteField_(site, 'LastCount', now);
     } else if (spec.heldOnly) {
+      // Parts leave one place and (except RETURNED) arrive at another. Only what is on record can leave:
+      // a part never booked in has nothing to take off, but everything scanned still arrives.
+      const fromVan = type === 'FROM_VAN';
+      const giver = fromVan ? vanCurrent : current, giverLoc = fromVan ? vanLoc : locId;
+      const outNote = { TO_VAN: 'To ' + by + "'s van", FROM_VAN: 'To ' + (site && site.Name), POSTED: 'Posted to ' + (dest && dest.Name), RETURNED: '' }[type];
       lines.forEach(l => {
-        // Only what is on record here can leave: a part never booked in has nothing to take off
-        const held = Math.max(0, current[l.family] || 0), take = Math.min(held, l.qty);
-        if (take < l.qty) notHeld.push(l.family);
+        const held = Math.max(0, giver[l.family] || 0), take = Math.min(held, l.qty), short = l.qty - take;
+        if (short) notHeld.push(l.family);
         if (take) {
-          current[l.family] = held - take;
-          row(l.family, l.exact, -take, type === 'TO_VAN' ? withNote('To ' + by + "'s van") : '');
+          giver[l.family] = held - take;
+          row(l.family, l.exact, -take, outNote ? withNote(outNote) : '', giverLoc, fromVan ? 'TO_SITE' : type);
         }
-        // Everything taken from a site goes into the van, including parts that were never booked in there
-        if (vanLoc) row(l.family, l.exact, l.qty, withNote('From ' + site.Name + (take < l.qty ? ' (' + (l.qty - take) + ' not on record there)' : '')), vanLoc, 'FROM_SITE');
+        if (type === 'TO_VAN') row(l.family, l.exact, l.qty, withNote('From ' + site.Name + (short ? ' (' + short + ' not on record there)' : '')), vanLoc, 'FROM_SITE');
+        if (fromVan) row(l.family, l.exact, l.qty, withNote('From ' + by + "'s van" + (short ? ' (' + short + ' not in its stock)' : '')), locId, 'FROM_VAN');
+        if (type === 'POSTED') posted.push({ ID: Utilities.getUuid(), Posted: now, SiteID: dest.SiteID, Family: l.family, Qty: l.qty, From: by, FromID: locId, JobNo: jobNo, Status: ON_ITS_WAY, Note: note });
       });
     } else {
       lines.forEach(l => {
         const qty = spec.sign * l.qty;
         let rowNote = l.odd ? 'unusual code' : '';
+        // A delivery booked in here may be a part someone posted: it has now arrived (no extra stock)
+        if (type === 'BOOK_IN') arrived_(waiting, l.family, l.qty, 'Booked in');
+        // Used straight from the box before anyone booked it in: it arrives first, so stock doesn't go below zero
+        if (spec.sign < 0 && (current[l.family] || 0) < l.qty) {
+          arrived_(waiting, l.family, l.qty - Math.max(0, current[l.family] || 0), 'Used on arrival').forEach(a => {
+            row(l.family, l.family, a.qty, 'Arrived: posted by ' + a.from, locId, 'BOOK_IN');
+            current[l.family] = (current[l.family] || 0) + a.qty;
+          });
+        }
         if (spec.sign < 0) {
           const after = (current[l.family] || 0) + qty;
           current[l.family] = after;
@@ -269,6 +296,7 @@ function actionSubmit(req) {
       });
     }
     if (rows.length) appendObjects_('Movements', rows);
+    if (posted.length) appendObjects_('OnItsWay', posted);
     rememberBatch_(batchId);
 
     // Stock now: what was there plus the rows just written (no second read of the Movements tab)
@@ -299,7 +327,7 @@ function actionSites(req) {
 
 // ---------------------------------------------------------------- vans
 
-const VAN_TYPES = ['BOOK_IN', 'USED', 'COUNT', 'RETURNED'];
+const VAN_TYPES = ['BOOK_IN', 'USED', 'COUNT', 'RETURNED', 'POSTED'];
 
 /** Each engineer's van is a stock location named after their UserID. */
 function vanId_(user) {
@@ -646,6 +674,65 @@ function actionReviewPart(req) {
   return { family: part.Family, name: name || part.Name };
 }
 
+// ---------------------------------------------------------------- parts on their way to a site
+
+const ON_ITS_WAY = 'On its way';
+
+/** Rows of the OnItsWay tab still on their way (one site's, or all), oldest first. [] if the tab isn't set up yet. */
+function onItsWay_(siteId) {
+  let rows;
+  try { rows = readTable_('OnItsWay'); } catch (e) { return []; }
+  return rows.filter(r => String(r.Status) === ON_ITS_WAY && (siteId === undefined || String(r.SiteID) === String(siteId)))
+    .map(r => Object.assign(r, { Family: normaliseCode(r.Family).family, Qty: Math.floor(Number(r.Qty) || 0) }))
+    .filter(r => r.Family && r.Qty > 0);
+}
+
+/**
+ * Up to qty of a part on its way (oldest first) has arrived: those rows are closed with `how`, or reduced if only
+ * part of one arrived. Returns [{ qty, from }] for what arrived. Changes the waiting list passed in.
+ */
+function arrived_(waiting, family, qty, how) {
+  const out = [];
+  waiting.forEach(w => {
+    if (qty <= 0 || w.Family !== family || w.Qty <= 0) return;
+    const take = Math.min(w.Qty, qty);
+    qty -= take;
+    w.Qty -= take;
+    out.push({ qty: take, from: w.From });
+    const sh = sheet_('OnItsWay');
+    if (w.Qty > 0) sh.getRange(w._row, col_('OnItsWay', 'Qty')).setValue(w.Qty);
+    else {
+      sh.getRange(w._row, col_('OnItsWay', 'Status')).setValue(how);
+      sh.getRange(w._row, col_('OnItsWay', 'Closed')).setValue(new Date());
+    }
+  });
+  return out;
+}
+
+/**
+ * Parts posted OnItsWayDays ago or more that nobody booked in, used or counted are taken to have arrived:
+ * each becomes a BOOK_IN at its site. Returns what is still on its way (that site's, or all).
+ */
+function settleOnItsWay_(siteId) {
+  const days = settingDays_('OnItsWayDays', 7), cutoff = Date.now() - days * 86400000;
+  const due = w => w.Posted instanceof Date && w.Posted.getTime() <= cutoff;
+  let waiting = onItsWay_(siteId);
+  if (!waiting.some(due)) return waiting;
+  withLock_(() => {
+    waiting = onItsWay_(siteId);   // again, inside the lock, so nothing is settled twice
+    const now = new Date(), tz = Session.getScriptTimeZone(), rows = [];
+    waiting.filter(due).forEach(w => {
+      rows.push({ MovementID: Utilities.getUuid(), Timestamp: now, SiteID: w.SiteID, Family: w.Family, ExactCode: w.Family, Qty: w.Qty, Type: 'BOOK_IN',
+        JobNo: w.JobNo, By: w.From, Role: 'engineer', Device: 'On its way',
+        Note: 'Posted by ' + w.From + ' on ' + Utilities.formatDate(w.Posted, tz, 'd MMM') + '; not booked in after ' + days + ' days, so taken as arrived' });
+      arrived_([w], w.Family, w.Qty, 'Taken as arrived');
+    });
+    if (rows.length) appendObjects_('Movements', rows);
+    waiting = waiting.filter(w => w.Qty > 0);
+  });
+  return waiting;
+}
+
 // ---------------------------------------------------------------- part codes
 
 /**
@@ -721,7 +808,7 @@ function recentMovements_(moves, names, limit) {
   return moves.slice(-limit).reverse().map(m => {
     const r = { at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty, type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo };
     const note = String(m.row.Note || '');
-    if (r.type === 'FROM_SITE') r.place = note.split(' — ')[0];   // "From <site>"
+    if (['FROM_SITE', 'TO_SITE', 'POSTED'].indexOf(r.type) >= 0) r.place = note.split(' — ')[0];   // "From <site>", "To <site>", "Posted to <site>"
     if (note.indexOf(FAILED_ON_FIT) === 0) r.failed = true;
     return r;
   });
@@ -956,6 +1043,7 @@ const SETTINGS_DEFAULTS = [
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
   ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.'],
   ['SurplusDays', 60, 'A part that is not in a site\'s Up Time Kit counts as surplus once it has been neither used nor delivered there for this many days.'],
+  ['OnItsWayDays', 7, 'A part posted to a site shows there as On its way until it is booked in, used or counted. After this many days it counts as arrived anyway.'],
   ['RecountDays', 90, 'Engineers are asked to count a site again this many days after its last stock count. Sites never counted, or with stock below zero, are always asked.'],
   ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']
@@ -1102,6 +1190,7 @@ function kitReportHtml_(usage, cfg, title) {
  * Run daily by the trigger that installDailyReport sets up. Sends nothing on a day with no kit use.
  */
 function sendDailyKitReport() {
+  try { settleOnItsWay_(); } catch (e) { console.error('On its way: ' + (e && e.message)); }   // parts posted a week ago
   const props = PropertiesService.getScriptProperties();
   const now = new Date();
   const tz = Session.getScriptTimeZone();

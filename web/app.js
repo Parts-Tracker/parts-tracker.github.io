@@ -10,14 +10,17 @@
     USED: { title: 'Parts used on a job', hint: 'Scan each part you fitted.', engineer: true, done: 'Recorded as used' },
     CUSTOMER_FITTED: { title: 'Parts we fitted ourselves', hint: 'Scan each part you fitted.', engineer: false, done: 'Recorded as fitted' },
     COUNT: { title: 'Stock count', hint: 'Scan every part here. Use + when there is more than one.', engineer: true, done: 'Count saved' },
-    TO_VAN: { title: 'Take to my van', hint: 'Scan each unused part you are taking with you.', engineer: true, done: 'Taken to your van' }
+    TO_VAN: { title: 'Take to my van', hint: 'Scan each unused part you are taking with you.', engineer: true, done: 'Taken to your van' },
+    FROM_VAN: { title: 'Book in from my van', engineer: true, done: 'Left at the site' }   // Book in, "From my van"
   };
-  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva' };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva', FROM_VAN: 'From a van', TO_SITE: 'Left at a site', POSTED: 'Posted to a site' };
   // Each action has its own brand colour (see the tone-* classes in app.css)
-  const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue', TO_VAN: 'orange', FROM_SITE: 'orange', RETURNED: 'orange' };
-  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva' };
+  const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue', TO_VAN: 'orange', FROM_SITE: 'orange', RETURNED: 'orange', FROM_VAN: 'green', TO_SITE: 'orange', POSTED: 'orange' };
+  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva', POSTED: 'Post to a site', FROM_VAN: 'Book in' };
   // Parts that leave only if they are on record where they are (as the server does it)
-  const HELD_ONLY = ['TO_VAN', 'RETURNED'];
+  const HELD_ONLY = ['TO_VAN', 'RETURNED', 'POSTED', 'FROM_VAN'];
+  // Records that change a site and a van at once
+  const TWO_SIDED = ['TO_VAN', 'FROM_VAN'];
   function setPill(id, mode) {
     $(id).textContent = PILL[mode] || '';
     $(id).className = 'mode-pill tone-' + (TONES[mode] || 'green');
@@ -210,6 +213,14 @@
     const parts = (d.stock || []).filter(s => s.qty > 0);
     const total = parts.reduce((n, s) => n + s.qty, 0);
     $('stockSummary').textContent = parts.length ? total + ' items, ' + parts.length + ' different parts' : 'Nothing recorded yet';
+    const coming = d.onItsWay || [];
+    $('onItsWayCard').hidden = !coming.length;
+    const ow = $('onItsWayList'); ow.textContent = '';
+    coming.forEach(w => ow.append(el('li', {},
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name' }, w.name || partName(w.family) || w.family),
+        el('div', { class: 'item-sub' }, ['posted by ' + w.by, w.jobNo ? 'call ' + w.jobNo : '', when(w.at)].filter(Boolean).join(' · '))),
+      el('div', { class: 'qty' }, '×' + w.qty))));
     renderRecent($('recentList'), d.recent);
     renderBanner();
   }
@@ -442,7 +453,7 @@
     state.mode = mode;
     state.basket = [];
     const words = state.where === 'van' ? VAN_MODES[mode] : MODES[mode];
-    $('scanTitle').textContent = words.title;
+    $('scanTitle').textContent = mode === 'POSTED' ? 'Post to ' + state.postTo.name : words.title;
     setPill('scanPill', mode);
     $('view-scan').className = 'view tone-' + TONES[mode];
     $('scanHint').textContent = words.hint;
@@ -621,8 +632,11 @@
   // ---------- Review and send ----------
   function openReview() {
     const mode = state.mode;
-    $('reviewTitle').textContent = (state.where === 'van' ? VAN_MODES[mode] : MODES[mode]).title;
+    $('reviewTitle').textContent = mode === 'POSTED' ? 'Post to ' + state.postTo.name : (state.where === 'van' ? VAN_MODES[mode] : MODES[mode]).title;
     setPill('reviewPill', mode);
+    // Engineers booking in at a site: a delivery, or parts from their own van
+    $('sourceCard').hidden = !(mode === 'BOOK_IN' && state.where === 'site' && isEngineer());
+    document.querySelector('input[name=source][value=delivery]').checked = true;
     const stock = {};
     (cur() && cur().stock || []).forEach(s => { stock[s.family] = s.qty; });
     const list = $('reviewList'); list.textContent = '';
@@ -641,7 +655,7 @@
       }
       list.append(li);
     });
-    reviewWarnings(mode, stock);
+    reviewWarnings(sendType(), stock);
     const zl = $('zeroList'); zl.textContent = '';
     // Parts on record that weren't scanned, including any below zero (a count is how those get put right)
     const missing = mode === 'COUNT' ? Object.keys(stock).filter(f => stock[f] !== 0 && !state.basket.some(b => b.family === f)) : [];
@@ -666,7 +680,11 @@
   function reviewWarnings(mode, stock) {
     const box = $('reviewWarn'); box.textContent = '';
     const notHeld = [], kitShort = [];
-    if (HELD_ONLY.includes(mode) && cur()) {
+    if (mode === 'FROM_VAN') {   // the parts leave the van, not the site
+      stock = {};
+      (state.van && state.van.stock || []).forEach(s => { stock[s.family] = s.qty; });
+    }
+    if (HELD_ONLY.includes(mode) && cur() && (mode !== 'FROM_VAN' || state.van)) {
       const kit = mode === 'TO_VAN' && state.data.kit || {};
       state.basket.forEach(b => {
         const held = Math.max(0, stock[b.family] || 0), left = held - Math.min(held, b.qty);
@@ -674,16 +692,25 @@
         if (kit[b.family] && left < held && left < kit[b.family]) kitShort.push(b.name + ' (kit ' + kit[b.family] + ', would leave ' + left + ')');
       });
     }
-    if (notHeld.length) box.append(el('p', {}, mode === 'TO_VAN'
-      ? 'Not on record at this site. They still go into your van, and the site\'s stock is not changed:'
-      : 'Not in your van stock, so nothing is taken off for:'), el('ul', {}, notHeld.map(t => el('li', {}, t))));
+    if (notHeld.length) box.append(el('p', {}, {
+      TO_VAN: 'Not on record at this site. They still go into your van, and the site\'s stock is not changed:',
+      RETURNED: 'Not in your van stock, so nothing is taken off for:',
+      POSTED: 'Not in your van stock. They are still posted, and your van\'s stock is not changed:',
+      FROM_VAN: 'Not in your van stock. They still go on the site, and your van\'s stock is not changed:'
+    }[mode]), el('ul', {}, notHeld.map(t => el('li', {}, t))));
     if (kitShort.length) box.append(el('p', {}, 'This leaves the site\'s Up Time Kit short:'), el('ul', {}, kitShort.map(t => el('li', {}, t))),
       el('p', {}, 'If a part came for a breakdown and was never booked in here, go back and book it in first, then take it.'));
     box.hidden = !box.children.length;
   }
 
+  /** What the review will record: Book in "From my van" is a FROM_VAN. */
+  function sendType() {
+    const fromVan = state.mode === 'BOOK_IN' && !$('sourceCard').hidden && document.querySelector('input[name=source]:checked').value === 'van';
+    return fromVan ? 'FROM_VAN' : state.mode;
+  }
+
   async function sendReview() {
-    const mode = state.mode;
+    const mode = sendType();
     const jobNo = $('jobNo').value.trim();
     const err = $('reviewError');
     if (mode === 'USED' && !jobNo) { err.textContent = 'Enter the job or ticket number.'; err.hidden = false; return; }
@@ -700,6 +727,7 @@
       items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined, failed: mode === 'USED' && b.failed ? b.failed : undefined })),
       zero, count: state.basket.reduce((s, b) => s + b.qty, 0)
     };
+    if (mode === 'POSTED') { batch.toSite = state.postTo.token; batch.toSiteName = state.postTo.name; }
     // Saved on the phone first, shown as done straight away, then sent in the background
     // (the server takes a few seconds, and the phone may have no signal)
     if (batch.van && mode === 'BOOK_IN') clearOrdered(state.basket.map(b => b.family));
@@ -718,23 +746,30 @@
    */
   function applyLocally(batch, side) {
     const site = state.data && batch.site === state.site ? state.data : null;
-    const sides = batch.type === 'TO_VAN' ? [['site', site], ['van', state.van]] : [batch.van ? ['van', state.van] : ['site', site]];
+    const sides = TWO_SIDED.includes(batch.type) ? [['site', site], ['van', state.van]] : [batch.van ? ['van', state.van] : ['site', site]];
     sides.forEach(([where, target]) => { if (target && (!side || side === where)) applyTo(target, batch, where); });
+  }
+  /** How a record changes one place: [sign (0 = a count sets it), only what is on record leaves, type shown, where it went]. */
+  function effect(batch, where) {
+    const t = batch.type;
+    if (t === 'TO_VAN') return where === 'van' ? [1, false, 'FROM_SITE', 'From ' + batch.siteName] : [-1, true, t];
+    if (t === 'FROM_VAN') return where === 'van' ? [-1, true, 'TO_SITE', 'To ' + batch.siteName] : [1, false, t];
+    if (t === 'POSTED') return [-1, true, t, 'Posted to ' + batch.toSiteName];
+    return [{ BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1, RETURNED: -1 }[t] || 0, t === 'RETURNED', t];
   }
   function applyTo(target, batch, where) {
     const stock = {};
     (target.stock || []).forEach(s => { stock[s.family] = Object.assign({}, s); });
-    const intoVan = batch.type === 'TO_VAN' && where === 'van';
-    const sign = intoVan ? 1 : { BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1, TO_VAN: -1, RETURNED: -1 }[batch.type];
+    const [sign, heldOnly, type, place] = effect(batch, where);
     const recent = [];
     const add = (family, name, qty, failed) => {
       if (!stock[family]) stock[family] = { family, name: name || partName(family), qty: 0 };
       const was = stock[family].qty;
-      if (HELD_ONLY.includes(batch.type) && !intoVan) qty = Math.min(qty, Math.max(0, was));   // only what is on record leaves
+      if (heldOnly) qty = Math.min(qty, Math.max(0, was));   // only what is on record leaves
       stock[family].qty = sign ? was + sign * qty : qty;
       const delta = stock[family].qty - was;
-      if (delta) recent.push({ at: batch.createdAt, family, name: stock[family].name, qty: delta, type: intoVan ? 'FROM_SITE' : batch.type, by: batch.by, jobNo: batch.jobNo,
-        place: intoVan ? 'From ' + batch.siteName : undefined, failed: failed ? true : undefined, pending: true });
+      if (delta) recent.push({ at: batch.createdAt, family, name: stock[family].name, qty: delta, type, by: batch.by, jobNo: batch.jobNo,
+        place, failed: failed ? true : undefined, pending: true });
     };
     batch.items.forEach(it => add(C.normalise(it.code).family, it.name, it.qty, it.failed));
     if (batch.type === 'COUNT') (batch.zero || []).forEach(f => { if (!batch.items.some(it => C.normalise(it.code).family === f)) add(f, '', 0); });
@@ -752,6 +787,8 @@
     $('doneText').textContent = batch.type === 'COUNT' ? 'Stock updated for ' + batch.siteName + '.'
       : batch.type === 'TO_VAN' ? parts + ' taken from ' + batch.siteName + ' into your van.'
       : batch.type === 'RETURNED' ? parts + ' sent back to Ceva from your van.'
+      : batch.type === 'FROM_VAN' ? parts + ' moved from your van to ' + batch.siteName + '.'
+      : batch.type === 'POSTED' ? parts + ' posted to ' + batch.toSiteName + '. They show there as on their way until booked in.'
       : parts + ' recorded at ' + batch.siteName + '.';
     $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
     $('doneStatus').textContent = 'Sending…';
@@ -871,7 +908,8 @@
     BOOK_IN: { title: 'Book in to my van', hint: 'Scan each part from your ByBox delivery.' },
     USED: { title: 'Used on a job', hint: 'Scan each part you fitted from your van.' },
     COUNT: { title: 'Van stock count', hint: 'Scan everything in the van. Use + when there is more than one.' },
-    RETURNED: { title: 'Return to Ceva', hint: 'Scan each unused part as you drop it at the ByBox.', done: 'Returned to Ceva' }
+    RETURNED: { title: 'Return to Ceva', hint: 'Scan each unused part as you drop it at the ByBox.', done: 'Returned to Ceva' },
+    POSTED: { title: 'Post to a site', hint: 'Scan each part you are posting.', done: 'Posted' }
   };
   const cur = () => (state.where === 'van' ? state.van : state.data);
 
@@ -898,7 +936,7 @@
       state.van = r;
       state.offline = false;
       // Van records still waiting to send are not on the server yet
-      state.queue.filter(q => q.van || q.type === 'TO_VAN').forEach(q => applyLocally(q, 'van'));
+      state.queue.filter(q => q.van || TWO_SIDED.includes(q.type)).forEach(q => applyLocally(q, 'van'));
       store.set('pt_van', state.van);
       renderVan();
     } catch (e) {
@@ -1214,8 +1252,10 @@
   // ---------- Change site (engineers) ----------
   // Lets a signed-in engineer move to another site in the same tab, instead of scanning its QR code
   // (each scan opens a new browser tab). The list is kept on the phone for poor signal.
-  async function chooseSite() {
-    if (!isEngineer()) { askPin(chooseSite, 'Engineer sign in'); return; }
+  /** The searchable site list: Change site, or pick where to post parts (onPick). */
+  async function chooseSite(onPick, title) {
+    if (typeof onPick !== 'function') onPick = null;
+    if (!isEngineer()) { askPin(() => chooseSite(onPick, title), 'Engineer sign in'); return; }
     let sites = store.get('pt_sites', []);
     const input = el('input', { class: 'input', placeholder: 'Site name, town or postcode', autocomplete: 'off' });
     const status = el('p', { class: 'muted' }, sites.length ? '' : 'Loading sites…');
@@ -1232,14 +1272,14 @@
         list = recent.concat(sites.filter(s => !recent.includes(s)));
         if (recent.length) results.append(el('p', { class: 'section-title' }, 'Recent sites first'));
       }
-      list.slice(0, 40).forEach(s => results.append(el('button', { class: 'pick', onclick: () => { closeSheet(); switchSite(s); } },
+      list.slice(0, 40).forEach(s => results.append(el('button', { class: 'pick', onclick: () => { closeSheet(); (onPick || switchSite)(s); } },
         el('span', {}, el('span', { class: 'item-name' }, s.name), el('span', { class: 'item-sub' }, [s.town, s.postcode].filter(Boolean).join(' · '))),
-        s.token === state.site ? el('span', { class: 'tag current' }, 'current') : null)));
+        s.token === state.site && !onPick ? el('span', { class: 'tag current' }, 'current') : null)));
       if (q && !list.length) results.append(el('p', { class: 'muted' }, 'No sites match.'));
       if (list.length > 40) results.append(el('p', { class: 'muted' }, 'Showing 40 of ' + list.length + '. Type to narrow the list.'));
     };
     input.addEventListener('input', render);
-    openSheet('Change site', [input, status, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))]);
+    openSheet(title || 'Change site', [input, status, results, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Cancel'))]);
     render();
     try {
       const r = await api({ action: 'sites', session: state.session });
@@ -1821,7 +1861,11 @@
     renderThemeButton();
     $('userChip').addEventListener('click', () => state.user ? signOut() : askPin(null));
     document.querySelectorAll('.action[data-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'site'; startMode(b.dataset.mode); }));
-    document.querySelectorAll('.action[data-van-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'van'; startMode(b.dataset.vanMode); }));
+    document.querySelectorAll('.action[data-van-mode]').forEach(b => b.addEventListener('click', () => {
+      state.where = 'van';
+      if (b.dataset.vanMode !== 'POSTED') return startMode(b.dataset.vanMode);
+      chooseSite(s => { state.postTo = s; state.where = 'van'; startMode('POSTED'); }, 'Post to which site?');
+    }));
     document.querySelectorAll('#whereSwitch button').forEach(b => b.addEventListener('click', () => {
       if (b.dataset.where === 'van') openVan(); else { state.where = 'site'; goHome(); }
     }));
@@ -1852,6 +1896,11 @@
     $('scanNext').addEventListener('click', openReview);
     $('reviewBack').addEventListener('click', () => { show('view-scan'); startCamera(); });
     $('reviewSend').addEventListener('click', sendReview);
+    document.querySelectorAll('input[name=source]').forEach(r => r.addEventListener('change', () => {
+      const stock = {};
+      (cur() && cur().stock || []).forEach(s => { stock[s.family] = s.qty; });
+      reviewWarnings(sendType(), stock);   // "From my van" checks the van's stock instead
+    }));
     $('doneHome').addEventListener('click', goHome);
     $('sheetBackdrop').addEventListener('click', closeSheet);
     $('printQr').addEventListener('click', () => window.print());

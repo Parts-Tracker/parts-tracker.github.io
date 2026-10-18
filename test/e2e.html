@@ -96,6 +96,7 @@
     $('scanNext').click();
     check('review shows 3 lines', await waitFor(() => visible('view-review') && $('reviewList').children.length === 3));
     check('no job number asked when booking in', $('jobCard').hidden);
+    check('customers are not asked where a delivery came from', $('sourceCard').hidden);
     slowMs = 1500;
     const sentAt = Date.now();
     $('reviewSend').click();
@@ -378,6 +379,87 @@
     const siteStockNow = stockBySite_(site.SiteID);
     appendObjects_('Movements', Object.keys(Object.assign({}, siteStockBefore, siteStockNow)).filter(f => (siteStockBefore[f] || 0) !== (siteStockNow[f] || 0))
       .map((f, i) => ({ MovementID: 'putback' + i, Timestamp: new Date(), SiteID: site.SiteID, Family: f, ExactCode: f, Qty: (siteStockBefore[f] || 0) - (siteStockNow[f] || 0), Type: 'COUNT', By: 'T', Role: 'engineer' })));
+    await A.loadSite();
+
+    // ---- From my van: parts left at a site in person, or posted to a site (on its way until they arrive) ----
+    const otherSite = rows('Sites')[1];
+    const stockBeforePosts = { [site.SiteID]: stockBySite_(site.SiteID), [otherSite.SiteID]: stockBySite_(otherSite.SiteID) };   // put back afterwards
+    const vanNudgers = stockOf('VAN-E01', 'P059K5813X');
+    tile('BOOK_IN').click();
+    await waitFor(() => visible('view-scan'));
+    A.handleCode('P059K5813X', 'barcode');
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    check('engineers booking in are asked: a delivery, or from my van', !$('sourceCard').hidden && document.querySelector('input[name=source][value=delivery]').checked);
+    const fromVanRadio = document.querySelector('input[name=source][value=van]');
+    fromVanRadio.checked = true; fromVanRadio.dispatchEvent(new Event('change'));
+    $('reviewSend').click();
+    check('parts from my van left at the site', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Left at the site' && /moved from your van to Sample Print Co/.test($('doneText').textContent)) && await saved(), $('doneText').textContent);
+    const leftAt = rows('Movements').filter(m => m.Type === 'FROM_VAN'), leftVan = rows('Movements').filter(m => m.Type === 'TO_SITE');
+    check('the site gains the part, the van loses it', leftAt.length === 1 && leftAt[0].SiteID === site.SiteID && leftAt[0].Qty === 1 && /From Test Engineer's van/.test(leftAt[0].Note) &&
+      leftVan.length === 1 && leftVan[0].SiteID === 'VAN-E01' && leftVan[0].Qty === -1 && /To Sample Print Co/.test(leftVan[0].Note) && stockOf('VAN-E01', 'P059K5813X') === vanNudgers - 1, [leftAt, leftVan]);
+    $('doneHome').click();
+    await waitFor(() => visible('view-home'));
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    await waitFor(() => visible('view-van'));
+    check('Post to a site: full-width orange button under the four on My van', document.querySelector('[data-van-mode=POSTED]').classList.contains('full') && document.querySelector('[data-van-mode=POSTED]').classList.contains('tone-orange'));
+    document.querySelector('[data-van-mode=POSTED]').click();
+    check('Post to a site asks which site first', await waitFor(() => $('sheetTitle').textContent === 'Post to which site?' && $('sheetBody').querySelectorAll('.pick').length === 2));
+    [...$('sheetBody').querySelectorAll('.pick')].find(b => /Sample Print/.test(b.textContent)).click();
+    check('the scanner names the site', await waitFor(() => visible('view-scan') && $('scanTitle').textContent === 'Post to Sample Print Co' && $('view-scan').classList.contains('tone-orange')), $('scanTitle').textContent);
+    A.handleCode('P059K6158X', 'barcode');
+    A.handleCode('P807E5651X', 'barcode');   // not in the van
+    $('scanNext').click(); await waitFor(() => visible('view-review'));
+    check('posting: optional call number, warning for a part not in the van', !$('jobCard').hidden && /optional/.test($('jobLabel').textContent) && /Not in your van stock\. They are still posted/.test($('reviewWarn').textContent) && /IBT Drive Gear/.test($('reviewWarn').textContent), $('reviewWarn').textContent);
+    $('jobNo').value = 'C6001';
+    const vanRollsBeforePost = stockOf('VAN-E01', 'P059K6158X'), siteRollsBeforePost = stockOf(site.SiteID, 'P059K6158X');
+    $('reviewSend').click();
+    check('posted', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Posted' && /posted to Sample Print Co\. They show there as on their way/.test($('doneText').textContent)) && await saved(), $('doneText').textContent);
+    const ways = () => rows('OnItsWay').filter(w => w.Status === 'On its way');
+    check('posting takes the part off the van and puts both on their way to the site, not into its stock',
+      stockOf('VAN-E01', 'P059K6158X') === vanRollsBeforePost - 1 && rows('Movements').some(m => m.Type === 'POSTED' && m.SiteID === 'VAN-E01' && /Posted to Sample Print Co/.test(m.Note)) &&
+      ways().length === 2 && ways().every(w => w.SiteID === site.SiteID && w.From === 'Test Engineer' && w.JobNo === 'C6001' && Number(w.Qty) === 1) && stockOf(site.SiteID, 'P059K6158X') === siteRollsBeforePost, rows('OnItsWay'));
+    $('doneHome').click();
+    check('van history says where it was posted', await waitFor(() => visible('view-van') && /Posted to Sample Print Co/.test($('vanRecentList').textContent)), $('vanRecentList').textContent);
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    await A.loadSite();
+    check('the site page lists what is on its way, with who posted it', await waitFor(() => !$('onItsWayCard').hidden && $('onItsWayList').children.length === 2 && /posted by Test Engineer · call C6001/.test($('onItsWayList').textContent)), $('onItsWayList').textContent);
+    // The customer books the box in when it arrives: counted once, and no longer on its way
+    call({ action: 'submit', site: site.Token, batchId: 'ow-1', type: 'BOOK_IN', items: [{ code: 'P059K6158X', qty: 1 }] });
+    check('booking a posted part in counts it once and clears it from on its way', stockOf(site.SiteID, 'P059K6158X') === siteRollsBeforePost + 1 &&
+      rows('OnItsWay').some(w => w.Family === 'P059K6158X' && w.Status === 'Booked in' && w.Closed) && ways().length === 1);
+    // The attending engineer fits the other straight from the box, before anyone books it in
+    const fitted = call({ action: 'submit', site: site.Token, session: A.state.session, batchId: 'ow-2', type: 'USED', jobNo: 'J7001', items: [{ code: 'P807E5651X', qty: 1 }] });
+    check('used straight from the box: it arrives first, so stock never goes below zero', fitted.ok && fitted.belowZero.length === 0 && stockOf(site.SiteID, 'P807E5651X') === 0 &&
+      rows('Movements').some(m => m.Type === 'BOOK_IN' && m.Family === 'P807E5651X' && /Arrived: posted by Test Engineer/.test(m.Note)) && ways().length === 0, fitted);
+    // Found by a stock count: no extra stock later
+    const vanCall = (type, items, extra) => call(Object.assign({ action: 'submit', van: true, session: A.state.session, batchId: 'ow-' + Math.random(), type, items }, extra || {}));
+    vanCall('POSTED', [{ code: 'P053K9189X', qty: 2 }], { toSite: otherSite.Token });
+    call({ action: 'submit', site: otherSite.Token, session: A.state.session, batchId: 'ow-3', type: 'COUNT', items: [{ code: 'P053K9189X', qty: 2 }], zero: [] });
+    check('a count that finds a posted part clears it from on its way', rows('OnItsWay').some(w => w.Family === 'P053K9189X' && w.Status === 'Found by a count') && ways().length === 0);
+    // Nobody books it in for a week: it is taken as arrived
+    vanCall('POSTED', [{ code: 'P019E7597X', qty: 1 }], { toSite: otherSite.Token });
+    const owSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('OnItsWay');
+    const lastWay = rows('OnItsWay').slice(-1)[0];
+    const otherFingers = stockOf(otherSite.SiteID, 'P019E7597X');
+    owSheet.getRange(lastWay._row, col_('OnItsWay', 'Posted')).setValue(new Date(Date.now() - 6 * 86400000));
+    let boot = call({ action: 'bootstrap', site: otherSite.Token });
+    check('a part posted 6 days ago is still on its way', boot.onItsWay.length === 1 && boot.onItsWay[0].family === 'P019E7597X' && stockOf(otherSite.SiteID, 'P019E7597X') === otherFingers, boot.onItsWay);
+    owSheet.getRange(lastWay._row, col_('OnItsWay', 'Posted')).setValue(new Date(Date.now() - 8 * 86400000));
+    boot = call({ action: 'bootstrap', site: otherSite.Token });
+    check('after 7 days (OnItsWayDays) it is taken as arrived, once', boot.onItsWay.length === 0 && stockOf(otherSite.SiteID, 'P019E7597X') === otherFingers + 1 &&
+      rows('Movements').filter(m => m.Device === 'On its way' && /not booked in after 7 days/.test(m.Note)).length === 1 && rows('OnItsWay').slice(-1)[0].Status === 'Taken as arrived');
+    call({ action: 'bootstrap', site: otherSite.Token }); settleOnItsWay_();   // what the evening email run does
+    check('settling again changes nothing', rows('Movements').filter(m => m.Device === 'On its way').length === 1);
+    check('posting needs a real site', !vanCall('POSTED', [{ code: 'P059K6158X', qty: 1 }], { toSite: 'nosuchsite000000000000' }).ok);
+    check('posting is only from a van', call({ action: 'submit', site: site.Token, session: A.state.session, batchId: 'ow-9', type: 'POSTED', toSite: otherSite.Token, items: [{ code: 'P059K6158X', qty: 1 }] }).code === 'bad_request');
+    check('customers cannot move parts from a van', call({ action: 'submit', site: site.Token, batchId: 'ow-10', type: 'FROM_VAN', items: [{ code: 'P059K6158X', qty: 1 }] }).code === 'forbidden');
+    // Put both sites' stock back as it was, for the checks that follow
+    [site.SiteID, otherSite.SiteID].forEach(id => {
+      const was = stockBeforePosts[id], now = stockBySite_(id);
+      appendObjects_('Movements', Object.keys(Object.assign({}, was, now)).filter(f => (was[f] || 0) !== (now[f] || 0))
+        .map((f, i) => ({ MovementID: 'putback2-' + id + i, Timestamp: new Date(), SiteID: id, Family: f, ExactCode: f, Qty: (was[f] || 0) - (now[f] || 0), Type: 'COUNT', By: 'T', Role: 'engineer' })));
+    });
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites').getRange(otherSite._row, col_('Sites', 'LastCount')).setValue('');   // the count above was only for these checks
     await A.loadSite();
 
     // ---- Change site: engineers move between sites in the same tab, no QR scan ----
@@ -932,18 +1014,19 @@
     const archived = book && book.getSheetByName('Movements');
     check('old movements copied to a new archive spreadsheet, linked on the Settings tab', archived && archived.getLastRow() - 1 === mvTotal - 5 &&
       rows('Settings').find(r => r.Setting === 'ArchiveSheet').Value === book.getUrl(), archived && archived.getLastRow());
-    check('every stock level is unchanged after archiving', JSON.stringify(stockTotals_()) === stockBeforeArchive);
+    const stockDiff = () => { const was = JSON.parse(stockBeforeArchive), now = stockTotals_(); return Object.keys(Object.assign({}, was, now)).filter(k => was[k] !== now[k]).map(k => k + ' ' + was[k] + '→' + now[k]); };
+    check('every stock level is unchanged after archiving', !stockDiff().length, stockDiff());
     const mvAfter = rows('Movements');
     check('Movements is now carried-forward lines then the recent 5, in order', mvAfter.length === plan.carried.length + 5 && mvAfter.length < mvTotal &&
       mvAfter.slice(0, -5).every(m => m.Type === 'CARRIED_FORWARD' && m.Qty !== 0) && JSON.stringify(mvAfter.slice(-5).map(m => m.MovementID)) === JSON.stringify(recent5), [mvAfter.length, plan.carried.length, mvTotal]);
     const archivedCount = archived.getLastRow();
     archiveMovements();
-    check('running the archive again does nothing', rows('Movements').length === mvAfter.length && archived.getLastRow() === archivedCount && JSON.stringify(stockTotals_()) === stockBeforeArchive);
+    check('running the archive again does nothing', rows('Movements').length === mvAfter.length && archived.getLastRow() === archivedCount && !stockDiff().length);
     // A year later: new old movements are archived, the carried-forward lines are folded in but never archived twice
     for (let r = mvAfter.length - 3; r <= mvAfter.length + 1; r++) mvSheet.getRange(r, tsCol).setValue(new Date(longAgo.getTime() + 999000 + r));
     archiveMovements();
     check('a second archive adds only real movements to the archive and keeps stock', archived.getLastRow() === archivedCount + 5 &&
-      JSON.stringify(stockTotals_()) === stockBeforeArchive && rows('Movements').every(m => m.Type === 'CARRIED_FORWARD'), archived.getLastRow() - archivedCount);
+      !stockDiff().length && rows('Movements').every(m => m.Type === 'CARRIED_FORWARD'), archived.getLastRow() - archivedCount);
     // My van still opens once the van's history has been archived
     const vanAfterArchive = call({ action: 'van', session: A.state.session });
     check('van loads after its history is archived', vanAfterArchive.ok && Array.isArray(vanAfterArchive.stock), 'ok=' + vanAfterArchive.ok + ' err=' + vanAfterArchive.error + ' code=' + vanAfterArchive.code + ' stock=' + (vanAfterArchive.stock || []).length + ' session=' + !!A.state.session);

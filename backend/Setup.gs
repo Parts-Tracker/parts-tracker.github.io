@@ -314,7 +314,7 @@ function setupSheets_() {
   // Keep codes and PINs as text so leading zeros survive
   // (columns found by heading, so they can be moved)
   [['Users', 'PIN'], ['Parts', 'Part Number'], ['Parts', 'Name'], ['Parts', 'ExactCodes'], ['Movements', 'Part Number'],
-   ['Movements', 'ExactCode'], ['VanKit', 'Part Number'], ['Kits', 'Part Number']].forEach(([tab, h]) => {
+   ['Movements', 'ExactCode'], ['VanKit', 'Part Number'], ['Kits', 'Part Number'], ['OnItsWay', 'Part Number']].forEach(([tab, h]) => {
     const L = colLetter_(col_(tab, h));
     ss.getSheetByName(tab).getRange(L + ':' + L).setNumberFormat('@');
   });
