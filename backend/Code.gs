@@ -35,13 +35,20 @@ const SHEETS = {
   Settings: ['Setting', 'Value', 'Notes']
 };
 
-// Which movement types each role may record, and the sign of their quantity
+// Which movement types each role may record, and the sign of their quantity.
+// heldOnly: only stock on record can leave (nothing is taken off for a part that was never booked in).
 const MOVEMENT_TYPES = {
   BOOK_IN: { sign: 1, roles: ['customer', 'engineer', 'admin'] },
   CUSTOMER_FITTED: { sign: -1, roles: ['customer', 'engineer', 'admin'] },
   USED: { sign: -1, roles: ['engineer', 'admin'], needsJob: true },
-  COUNT: { sign: 0, roles: ['engineer', 'admin'] }
+  COUNT: { sign: 0, roles: ['engineer', 'admin'] },
+  // Unused parts an engineer takes from a site into their own van; the van's side is recorded as FROM_SITE
+  TO_VAN: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true },
+  // Unused good parts sent back to Ceva from the engineer's van (dropped at a ByBox)
+  RETURNED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true }
 };
+// Note on a USED line for a part that failed on fit: still used (a kit site gets it reordered), kept for a warranty claim
+const FAILED_ON_FIT = 'Failed on fit (warranty)';
 
 const SESSION_HOURS = 24 * 30; // engineers stay signed in on their phone for 30 days
 const USERS_CACHE_SECONDS = 300;
@@ -95,9 +102,10 @@ function actionBootstrap(req) {
   const parts = readTable_('Parts');
   const names = partNames_(parts);
   const moves = movementsAt_(site.SiteID);
+  const printers = readTable_('Printers').filter(p => String(p.SiteID) === String(site.SiteID));
   const out = {
     site: { id: site.SiteID, name: site.Name, address: site.Address, postcode: site.Postcode, lastCount: iso_(site.LastCount) },
-    printers: readTable_('Printers').filter(p => String(p.SiteID) === String(site.SiteID)).map(p => p.Model),
+    printers: printers.map(p => p.Model),
     stock: stockLines_(sumStock_(moves), names),
     recent: recentMovements_(moves, names, 10),
     recountDays: recountDays_(),
@@ -107,6 +115,8 @@ function actionBootstrap(req) {
   if (req.session) {
     const user = sessionUser_(req.session, true);
     if (user) out.user = { name: user.Name, role: user.Role };
+    // Engineers are warned before taking a part that would leave the site's Up Time Kit short
+    if (user && printers.length) out.kit = kitWanted_(printers)[String(site.SiteID)] || {};
   }
   return out;
 }
@@ -142,8 +152,10 @@ function actionLogin(req) {
 
 /**
  * Record a batch of scans for a site.
- * req: { site, session?, batchId, type, jobNo?, device?, note?, items: [{ code, qty, name? }], zero?: [family] }
+ * req: { site, session?, batchId, type, jobNo?, device?, note?, items: [{ code, qty, name?, failed? }], zero?: [family] }
  * For COUNT, items are the counted quantities and `zero` lists families to set to 0.
+ * For USED, an item's `failed` is how many of it failed on fit.
+ * TO_VAN moves parts from the site into the signed-in engineer's van; RETURNED (van only) sends them back to Ceva.
  */
 function actionSubmit(req) {
   // A batch is for a site (QR token) or for the signed-in engineer's own van (req.van)
@@ -157,7 +169,9 @@ function actionSubmit(req) {
   const type = String(req.type || '');
   const spec = MOVEMENT_TYPES[type];
   if (!spec) throw err_('bad_request', 'Unknown movement type.');
+  if (spec.vanOnly && !req.van) throw err_('bad_request', 'That action is only for your van stock.');
   if (spec.roles.indexOf(role) < 0) throw err_('forbidden', 'Only engineers can do that. Sign in with your PIN.');
+  const vanLoc = type === 'TO_VAN' ? vanId_(user) : null;   // where parts taken from a site go
   const jobNo = String(req.jobNo || '').trim();
   if (spec.needsJob && !jobNo) throw err_('bad_request', 'A job or ticket number is needed for parts used.');
   const batchId = String(req.batchId || '').slice(0, 64);
@@ -191,22 +205,27 @@ function actionSubmit(req) {
       } else if (n.exact !== n.family) {
         addExactCode_(byFamily[n.family], n.exact);
       }
-      lines.push({ family: n.family, exact: n.exact, qty: qty, odd: !!n.warning });
+      const failed = type === 'USED' ? Math.min(qty, Math.max(0, Math.floor(Number(it.failed) || 0))) : 0;
+      lines.push({ family: n.family, exact: n.exact, qty: qty, odd: !!n.warning, failed: failed });
     });
     if (newParts.length) appendObjects_('Parts', newParts);
 
     const now = new Date();
     const device = String(req.device || '').slice(0, 80);
     const note = String(req.note || '').slice(0, 200);
+    const withNote = text => text + (note ? ' — ' + note : '');
     const rows = [];
-    const row = (family, exact, qty, rowNote) => rows.push({
-      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: locId, Family: family, ExactCode: exact,
-      Qty: qty, Type: type, JobNo: jobNo, By: by, Role: role, Device: device, Note: rowNote || note, BatchID: batchId
+    const row = (family, exact, qty, rowNote, loc, rowType) => rows.push({
+      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: loc || locId, Family: family, ExactCode: exact,
+      Qty: qty, Type: rowType || type, JobNo: jobNo, By: by, Role: role, Device: device, Note: rowNote || note, BatchID: batchId
     });
 
-    const before = stockBySite_(locId);
+    const moves = movementColumns_();
+    const stockAt = id => sumStock_(moves.filter(m => m.site === String(id)));
+    const before = stockAt(locId);
+    const vanBefore = vanLoc ? stockAt(vanLoc) : null;
     const current = Object.assign({}, before);
-    const warnings = [];
+    const warnings = [], notHeld = [];
     if (type === 'COUNT') {
       // Counted lines set the quantity; families in `zero` are set to 0. Only differences are written.
       const counted = {};
@@ -218,6 +237,18 @@ function actionSubmit(req) {
         if (delta !== 0) row(fam, fam, delta, 'counted ' + counted[fam] + ', was ' + was + (note ? '. ' + note : ''));
       });
       if (site) setSiteField_(site, 'LastCount', now);
+    } else if (spec.heldOnly) {
+      lines.forEach(l => {
+        // Only what is on record here can leave: a part never booked in has nothing to take off
+        const held = Math.max(0, current[l.family] || 0), take = Math.min(held, l.qty);
+        if (take < l.qty) notHeld.push(l.family);
+        if (take) {
+          current[l.family] = held - take;
+          row(l.family, l.exact, -take, type === 'TO_VAN' ? withNote('To ' + by + "'s van") : '');
+        }
+        // Everything taken from a site goes into the van, including parts that were never booked in there
+        if (vanLoc) row(l.family, l.exact, l.qty, withNote('From ' + site.Name + (take < l.qty ? ' (' + (l.qty - take) + ' not on record there)' : '')), vanLoc, 'FROM_SITE');
+      });
     } else {
       lines.forEach(l => {
         const qty = spec.sign * l.qty;
@@ -230,7 +261,11 @@ function actionSubmit(req) {
             warnings.push(l.family);
           }
         }
-        row(l.family, l.exact, qty, rowNote);
+        if (l.failed) {
+          // Parts that failed on fit get their own line, so they can be found for the warranty claim
+          row(l.family, l.exact, -l.failed, withNote(FAILED_ON_FIT + (rowNote ? '; ' + rowNote : '')));
+          if (l.qty > l.failed) row(l.family, l.exact, qty + l.failed, rowNote);
+        } else row(l.family, l.exact, qty, rowNote);
       });
     }
     if (rows.length) appendObjects_('Movements', rows);
@@ -238,8 +273,12 @@ function actionSubmit(req) {
 
     // Stock now: what was there plus the rows just written (no second read of the Movements tab)
     const after = Object.assign({}, before);
-    rows.forEach(r => { after[r.Family] = (after[r.Family] || 0) + r.Qty; });
-    return { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, stock: stockLines_(after, partNames_(parts.concat(newParts))) };
+    const vanAfter = vanBefore && Object.assign({}, vanBefore);
+    rows.forEach(r => { const s = r.SiteID === vanLoc ? vanAfter : after; s[r.Family] = (s[r.Family] || 0) + r.Qty; });
+    const names = partNames_(parts.concat(newParts));
+    const out = { recorded: rows.length, newParts: newParts.map(p => p.Family), belowZero: warnings, notHeld: notHeld, stock: stockLines_(after, names) };
+    if (vanAfter) out.vanStock = stockLines_(vanAfter, names);
+    return out;
   } finally {
     lock.releaseLock();
   }
@@ -260,7 +299,7 @@ function actionSites(req) {
 
 // ---------------------------------------------------------------- vans
 
-const VAN_TYPES = ['BOOK_IN', 'USED', 'COUNT'];
+const VAN_TYPES = ['BOOK_IN', 'USED', 'COUNT', 'RETURNED'];
 
 /** Each engineer's van is a stock location named after their UserID. */
 function vanId_(user) {
@@ -423,14 +462,7 @@ function recountDays_() { return settingDays_('RecountDays', 90); }
  */
 function surplus_(sites, moves, stockAt, printers, kitRows) {
   const days = settingDays_('SurplusDays', 60);
-  const kits = kitsByModel_(kitRows);
-  const want = {};   // site -> { family: kit qty for all its kit machines }
-  printers.forEach(p => {
-    const m = cleanModel_(p.Model), id = String(p.SiteID);
-    if (noKit_(p) || !kits[m]) return;
-    const w = want[id] = want[id] || {};
-    Object.keys(kits[m]).forEach(f => { w[f] = (w[f] || 0) + kits[m][f]; });
-  });
+  const want = kitWanted_(printers, kitRows);
   const last = {};   // "site|family" -> when that part was last delivered, counted in, or used there
   moves.forEach(m => {
     const t = m.row.Timestamp, k = m.site + '|' + m.family;
@@ -451,6 +483,22 @@ function surplus_(sites, moves, stockAt, printers, kitRows) {
     });
   });
   return { surplus: surplus, soon: soon, days: days };
+}
+
+/**
+ * The Up Time Kit each site should hold: { siteId: { family: qty } }, one kit per machine,
+ * machines ticked No kit left out. Pass the Kits rows if they have already been read.
+ */
+function kitWanted_(printers, kitRows) {
+  const kits = kitsByModel_(kitRows);
+  const want = {};
+  printers.forEach(p => {
+    const m = cleanModel_(p.Model), id = String(p.SiteID);
+    if (noKit_(p) || !kits[m]) return;
+    const w = want[id] = want[id] || {};
+    Object.keys(kits[m]).forEach(f => { w[f] = (w[f] || 0) + kits[m][f]; });
+  });
+  return want;
 }
 
 /** Every model in use or with a kit, for the admin's pick list. Pass the tabs if they have already been read. */
@@ -670,10 +718,13 @@ function stockLines_(stock, names) {
 
 /** The latest of a site's movements, newest first. */
 function recentMovements_(moves, names, limit) {
-  return moves.slice(-limit).reverse().map(m => ({
-    at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty,
-    type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo
-  }));
+  return moves.slice(-limit).reverse().map(m => {
+    const r = { at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty, type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo };
+    const note = String(m.row.Note || '');
+    if (r.type === 'FROM_SITE') r.place = note.split(' — ')[0];   // "From <site>"
+    if (note.indexOf(FAILED_ON_FIT) === 0) r.failed = true;
+    return r;
+  });
 }
 
 function partNames_(parts) {

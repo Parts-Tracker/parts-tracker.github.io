@@ -74,6 +74,11 @@
           <span class="action-title">Van stock count</span><span class="action-sub">Count everything in the van</span>
         </button>
       </div>
+      <button class="action action-wide tone-orange" data-van-mode="RETURNED">
+        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></span>
+        <span class="action-text"><span class="action-title">Return to Ceva</span><span class="action-sub">Unused parts dropped at a ByBox</span></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
 
       <div class="card" id="vanKitCard">
         <div class="kit-head">
@@ -137,6 +142,11 @@
           <span class="action-title">View stock</span><span class="action-sub" id="stockSummary"></span>
         </button>
       </div>
+      <button class="action action-wide tone-orange" data-mode="TO_VAN" data-engineer>
+        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5h11v10h-11z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg></span>
+        <span class="action-text"><span class="action-title">Take to my van</span><span class="action-sub">Unused parts going with you</span></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
       <div class="card">
         <h2 class="section-title">Recent activity</h2>
         <ul class="list" id="recentList"></ul>
@@ -186,13 +196,14 @@
       <div class="card">
         <ul class="list" id="reviewList"></ul>
       </div>
+      <div class="warn" id="reviewWarn" hidden></div>
       <div class="card" id="zeroCard" hidden>
         <h2>On record but not scanned</h2>
         <p class="muted">Ticked parts will be set to 0. Untick any that are here but you could not scan.</p>
         <ul class="list" id="zeroList"></ul>
       </div>
       <div class="card" id="jobCard" hidden>
-        <label for="jobNo"><strong>Job or ticket number</strong></label>
+        <label for="jobNo"><strong id="jobLabel">Job or ticket number</strong></label>
         <input id="jobNo" class="input" inputmode="text" autocomplete="off" placeholder="e.g. 1234567">
       </div>
       <div class="card">

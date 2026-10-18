@@ -9,12 +9,15 @@
     BOOK_IN: { title: 'Book in a delivery', hint: 'Scan each part that arrived.', engineer: false, done: 'Booked in' },
     USED: { title: 'Parts used on a job', hint: 'Scan each part you fitted.', engineer: true, done: 'Recorded as used' },
     CUSTOMER_FITTED: { title: 'Parts we fitted ourselves', hint: 'Scan each part you fitted.', engineer: false, done: 'Recorded as fitted' },
-    COUNT: { title: 'Stock count', hint: 'Scan every part here. Use + when there is more than one.', engineer: true, done: 'Count saved' }
+    COUNT: { title: 'Stock count', hint: 'Scan every part here. Use + when there is more than one.', engineer: true, done: 'Count saved' },
+    TO_VAN: { title: 'Take to my van', hint: 'Scan each unused part you are taking with you.', engineer: true, done: 'Taken to your van' }
   };
-  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected' };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva' };
   // Each action has its own brand colour (see the tone-* classes in app.css)
-  const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue' };
-  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count' };
+  const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue', TO_VAN: 'orange', FROM_SITE: 'orange', RETURNED: 'orange' };
+  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva' };
+  // Parts that leave only if they are on record where they are (as the server does it)
+  const HELD_ONLY = ['TO_VAN', 'RETURNED'];
   function setPill(id, mode) {
     $(id).textContent = PILL[mode] || '';
     $(id).className = 'mode-pill tone-' + (TONES[mode] || 'green');
@@ -233,7 +236,7 @@
       activityIcon(r),
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, r.name || r.family),
-        el('div', { class: 'item-sub' }, [TYPE_LABEL[r.type] || r.type, r.by, r.jobNo ? 'job ' + r.jobNo : '', r.pending ? 'waiting to send' : when(r.at)].filter(Boolean).join(' · '))),
+        el('div', { class: 'item-sub' }, [r.place || TYPE_LABEL[r.type] || r.type, r.failed ? 'failed on fit' : '', r.by, r.jobNo ? 'job ' + r.jobNo : '', r.pending ? 'waiting to send' : when(r.at)].filter(Boolean).join(' · '))),
       el('div', { class: 'qty' + (r.qty < 0 ? ' neg' : '') }, (r.qty > 0 ? '+' : '') + r.qty))));
   }
 
@@ -308,7 +311,7 @@
       state.data = r;
       state.offline = false;
       // Records still waiting to send are not on the server yet, so keep them in the picture
-      state.queue.filter(q => q.site === state.site).forEach(applyLocally);
+      state.queue.filter(q => q.site === state.site).forEach(q => applyLocally(q, 'site'));
       store.set('pt_boot_' + state.site, state.data);
       renderUserChip();
       renderHome();
@@ -431,7 +434,7 @@
 
   // ---------- Scanning ----------
   function startMode(mode) {
-    if (MODES[mode].engineer && !isEngineer()) {
+    if ((MODES[mode] || {}).engineer && !isEngineer()) {
       askPin(() => startMode(mode), 'Engineers only: sign in');
       return;
     }
@@ -623,11 +626,21 @@
     (cur() && cur().stock || []).forEach(s => { stock[s.family] = s.qty; });
     const list = $('reviewList'); list.textContent = '';
     if (!state.basket.length) list.append(el('li', { class: 'muted' }, 'Nothing scanned.' + (mode === 'COUNT' ? ' Send to record that nothing is here.' : '')));
-    state.basket.forEach(b => list.append(el('li', {},
-      el('div', { class: 'item-main' },
-        el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
-        el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : ''))),
-      el('div', { class: 'qty' }, b.qty))));
+    state.basket.forEach(b => {
+      const li = el('li', {},
+        el('div', { class: 'item-main' },
+          el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
+          el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : ''))),
+        el('div', { class: 'qty' }, b.qty));
+      if (mode === 'USED') {
+        // Still recorded as used (a kit site gets it reordered), but marked for the warranty claim
+        const tick = el('input', { type: 'checkbox', checked: !!b.failed, onchange: () => { b.failed = tick.checked ? 1 : 0; } });
+        li.classList.add('with-tick');
+        li.append(el('label', { class: 'fail-tick' }, tick, (b.qty > 1 ? 'One of these failed on fit' : 'Failed on fit') + ' (keeping it for warranty)'));
+      }
+      list.append(li);
+    });
+    reviewWarnings(mode, stock);
     const zl = $('zeroList'); zl.textContent = '';
     // Parts on record that weren't scanned, including any below zero (a count is how those get put right)
     const missing = mode === 'COUNT' ? Object.keys(stock).filter(f => stock[f] !== 0 && !state.basket.some(b => b.family === f)) : [];
@@ -637,10 +650,35 @@
         el('div', { class: 'item-name' }, partName(f) || 'Unknown part'),
         el('div', { class: 'item-sub mono' }, f + ' · on record: ' + stock[f])))));
     $('zeroCard').hidden = !missing.length;
-    $('jobCard').hidden = mode !== 'USED';
+    // Used needs a job number; parts taken to the van or returned to Ceva can have the breakdown call number
+    $('jobCard').hidden = mode !== 'USED' && !HELD_ONLY.includes(mode);
+    $('jobLabel').textContent = mode === 'USED' ? 'Job or ticket number' : 'Call or job number (optional)';
     $('reviewError').hidden = true;
     $('reviewSend').disabled = false;
     show('view-review');
+  }
+
+  /**
+   * Before sending parts to the van or back to Ceva: which ones are not on record where they are leaving from
+   * (nothing is taken off for those), and which would leave the site's Up Time Kit short.
+   */
+  function reviewWarnings(mode, stock) {
+    const box = $('reviewWarn'); box.textContent = '';
+    const notHeld = [], kitShort = [];
+    if (HELD_ONLY.includes(mode) && cur()) {
+      const kit = mode === 'TO_VAN' && state.data.kit || {};
+      state.basket.forEach(b => {
+        const held = Math.max(0, stock[b.family] || 0), left = held - Math.min(held, b.qty);
+        if (held < b.qty) notHeld.push(b.name + (held ? ' (only ' + held + ' on record)' : ''));
+        if (kit[b.family] && left < held && left < kit[b.family]) kitShort.push(b.name + ' (kit ' + kit[b.family] + ', would leave ' + left + ')');
+      });
+    }
+    if (notHeld.length) box.append(el('p', {}, mode === 'TO_VAN'
+      ? 'Not on record at this site. They still go into your van, and the site\'s stock is not changed:'
+      : 'Not in your van stock, so nothing is taken off for:'), el('ul', {}, notHeld.map(t => el('li', {}, t))));
+    if (kitShort.length) box.append(el('p', {}, 'This leaves the site\'s Up Time Kit short:'), el('ul', {}, kitShort.map(t => el('li', {}, t))),
+      el('p', {}, 'If a part came for a breakdown and was never booked in here, go back and book it in first, then take it.'));
+    box.hidden = !box.children.length;
   }
 
   async function sendReview() {
@@ -658,7 +696,7 @@
       siteName: state.where === 'van' ? 'your van' : (state.data ? state.data.site.name : ''), type: mode, jobNo,
       note: $('note').value.trim(), device: deviceLabel(), createdAt: new Date().toISOString(),
       by: state.user ? state.user.name : 'Customer',
-      items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined })),
+      items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined, failed: mode === 'USED' && b.failed ? b.failed : undefined })),
       zero, count: state.basket.reduce((s, b) => s + b.qty, 0)
     };
     // Saved on the phone first, shown as done straight away, then sent in the background
@@ -673,36 +711,47 @@
     sendBatch(batch).then(result => showSendResult(batch, result));
   }
 
-  /** Updates the site's stock and recent activity on the phone before the server confirms. */
-  function applyLocally(batch) {
-    const target = batch.van ? state.van : (state.data && batch.site === state.site ? state.data : null);
-    if (!target) return;
+  /**
+   * Updates stock and recent activity on the phone before the server confirms. A take-to-van batch changes
+   * the site and the van; `side` ('site' or 'van') applies just one of them.
+   */
+  function applyLocally(batch, side) {
+    const site = state.data && batch.site === state.site ? state.data : null;
+    const sides = batch.type === 'TO_VAN' ? [['site', site], ['van', state.van]] : [batch.van ? ['van', state.van] : ['site', site]];
+    sides.forEach(([where, target]) => { if (target && (!side || side === where)) applyTo(target, batch, where); });
+  }
+  function applyTo(target, batch, where) {
     const stock = {};
     (target.stock || []).forEach(s => { stock[s.family] = Object.assign({}, s); });
-    const sign = { BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1 }[batch.type];
+    const intoVan = batch.type === 'TO_VAN' && where === 'van';
+    const sign = intoVan ? 1 : { BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1, TO_VAN: -1, RETURNED: -1 }[batch.type];
     const recent = [];
-    const add = (family, name, qty) => {
+    const add = (family, name, qty, failed) => {
       if (!stock[family]) stock[family] = { family, name: name || partName(family), qty: 0 };
       const was = stock[family].qty;
+      if (HELD_ONLY.includes(batch.type) && !intoVan) qty = Math.min(qty, Math.max(0, was));   // only what is on record leaves
       stock[family].qty = sign ? was + sign * qty : qty;
       const delta = stock[family].qty - was;
-      if (delta) recent.push({ at: batch.createdAt, family, name: stock[family].name, qty: delta, type: batch.type, by: batch.by, jobNo: batch.jobNo, pending: true });
+      if (delta) recent.push({ at: batch.createdAt, family, name: stock[family].name, qty: delta, type: intoVan ? 'FROM_SITE' : batch.type, by: batch.by, jobNo: batch.jobNo,
+        place: intoVan ? 'From ' + batch.siteName : undefined, failed: failed ? true : undefined, pending: true });
     };
-    batch.items.forEach(it => add(C.normalise(it.code).family, it.name, it.qty));
+    batch.items.forEach(it => add(C.normalise(it.code).family, it.name, it.qty, it.failed));
     if (batch.type === 'COUNT') (batch.zero || []).forEach(f => { if (!batch.items.some(it => C.normalise(it.code).family === f)) add(f, '', 0); });
     target.stock = Object.values(stock).filter(s => s.qty !== 0).sort((a, b) => (a.name || a.family).localeCompare(b.name || b.family));
     target.recent = recent.concat(target.recent || []).slice(0, 10);
     if (batch.type === 'COUNT' && !batch.van && target.site) target.site.lastCount = batch.createdAt;
-    if (batch.van) { store.set('pt_van', state.van); renderVan(); }
+    if (where === 'van') { store.set('pt_van', state.van); renderVan(); }
     else { store.set('pt_boot_' + state.site, state.data); renderHome(); }
   }
 
   function showDone(batch) {
     state.doneBatch = batch.batchId;
-    $('doneTitle').textContent = MODES[batch.type].done;
-    $('doneText').textContent = batch.type === 'COUNT'
-      ? 'Stock updated for ' + batch.siteName + '.'
-      : batch.count + (batch.count === 1 ? ' part' : ' parts') + ' recorded at ' + batch.siteName + '.';
+    $('doneTitle').textContent = (batch.van && VAN_MODES[batch.type].done) || MODES[batch.type].done;
+    const parts = batch.count + (batch.count === 1 ? ' part' : ' parts');
+    $('doneText').textContent = batch.type === 'COUNT' ? 'Stock updated for ' + batch.siteName + '.'
+      : batch.type === 'TO_VAN' ? parts + ' taken from ' + batch.siteName + ' into your van.'
+      : batch.type === 'RETURNED' ? parts + ' sent back to Ceva from your van.'
+      : parts + ' recorded at ' + batch.siteName + '.';
     $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
     $('doneStatus').textContent = 'Sending…';
     $('doneStatus').className = 'send-status';
@@ -718,15 +767,18 @@
   function showSendResult(batch, result) {
     const onScreen = state.view === 'view-done' && state.doneBatch === batch.batchId;
     if (result.busy) return;
+    // Parts sent back to Ceva that were not in the van's stock had nothing taken off
+    const warning = result.ok && [result.belowZero.length ? belowZeroText(result.belowZero) : '',
+      batch.type === 'RETURNED' && result.notHeld.length ? 'Not in your van stock, so nothing was taken off for: ' + result.notHeld.map(f => partName(f) || f).join(', ') + '.' : ''].filter(Boolean).join(' ');
     if (!onScreen) {
-      if (result.ok && result.belowZero.length) toast(belowZeroText(result.belowZero));
+      if (warning) toast(warning);
       return;
     }
     const status = $('doneStatus');
     if (result.ok) {
       status.textContent = 'Saved';
       status.className = 'send-status ok';
-      if (result.belowZero.length) { $('doneWarn').textContent = belowZeroText(result.belowZero); $('doneWarn').hidden = false; }
+      if (warning) { $('doneWarn').textContent = warning; $('doneWarn').hidden = false; }
     } else if (result.queued) {
       status.textContent = 'No signal. Saved on this phone; it will send automatically.';
       status.className = 'send-status wait';
@@ -778,8 +830,9 @@
           store.set('pt_boot_' + state.site, state.data);
           loadSite();
         }
+        if (r.vanStock && state.van) { state.van.stock = r.vanStock; store.set('pt_van', state.van); loadVan(); }
         saveQueue();
-        return { ok: true, belowZero: r.belowZero || [] };
+        return { ok: true, belowZero: r.belowZero || [], notHeld: r.notHeld || [] };
       }
       batch.error = (r.code === 'session' || r.code === 'forbidden') ? r.error + ' Sign in to send it.' : r.error;
       saveQueue();
@@ -816,7 +869,8 @@
   const VAN_MODES = {
     BOOK_IN: { title: 'Book in to my van', hint: 'Scan each part from your ByBox delivery.' },
     USED: { title: 'Used on a job', hint: 'Scan each part you fitted from your van.' },
-    COUNT: { title: 'Van stock count', hint: 'Scan everything in the van. Use + when there is more than one.' }
+    COUNT: { title: 'Van stock count', hint: 'Scan everything in the van. Use + when there is more than one.' },
+    RETURNED: { title: 'Return to Ceva', hint: 'Scan each unused part as you drop it at the ByBox.', done: 'Returned to Ceva' }
   };
   const cur = () => (state.where === 'van' ? state.van : state.data);
 
@@ -843,7 +897,7 @@
       state.van = r;
       state.offline = false;
       // Van records still waiting to send are not on the server yet
-      state.queue.filter(q => q.van).forEach(applyLocally);
+      state.queue.filter(q => q.van || q.type === 'TO_VAN').forEach(q => applyLocally(q, 'van'));
       store.set('pt_van', state.van);
       renderVan();
     } catch (e) {

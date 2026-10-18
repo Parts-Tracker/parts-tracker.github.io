@@ -93,6 +93,10 @@ p { margin: 6px 0; }
 .action-main .action-title { font-size: 1.15rem; font-weight: 700; }
 .action-main .action-sub { font-weight: 600; opacity: 1; }
 .chev { font-size: 2rem; line-height: 1; opacity: 0.9; }
+/* A full-width outlined tile below the grid (Take to my van, Return to Ceva) */
+.action-wide { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 72px; padding: 14px 18px; margin: 0 0 12px; }
+.action-wide .action-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.action-wide .chev { color: var(--tone-ink); }
 .action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
 .action-grid .action { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 120px; padding: 14px; }
 .action-grid .action-icon { margin-bottom: 8px; }
@@ -126,6 +130,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .list li:last-child { border-bottom: 0; }
+.list li.with-tick { flex-wrap: wrap; }
+.fail-tick { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: 0.88rem; color: var(--text-muted); }
+.fail-tick input { width: 20px; height: 20px; margin: 0; accent-color: var(--warn); }
+.warn ul { margin: 6px 0 0; padding-left: 18px; }
+.warn p { margin: 0; }
+.warn p + p, .warn ul + p { margin-top: 8px; }
 .item-main { flex: 1; min-width: 0; }
 .item-name { font-weight: 600; overflow-wrap: anywhere; }
 .item-sub { font-size: 0.8rem; color: var(--text-muted); }
@@ -188,19 +198,22 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .tone-blue { --tone-bg: #E8F3F8; --tone-ink: #0F425F; --tone-solid: #1E83BE; }
 .tone-purple { --tone-bg: #F4EEF7; --tone-ink: #472C57; --tone-solid: #8E58AD; }
 .tone-lime { --tone-bg: #F0F7E8; --tone-ink: #34560F; --tone-solid: #67AC1E; }
+.tone-orange { --tone-bg: #FDEEE6; --tone-ink: #752B02; --tone-solid: #EA5504; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .tone-pink { --tone-bg: #701B36; --tone-ink: #EC86A7; --tone-solid: #E0356C; }
   :root:not([data-theme="light"]) .tone-blue { --tone-bg: #0F425F; --tone-ink: #78B5D8; --tone-solid: #1E83BE; }
   :root:not([data-theme="light"]) .tone-purple { --tone-bg: #472C57; --tone-ink: #BB9BCE; --tone-solid: #8E58AD; }
   :root:not([data-theme="light"]) .tone-lime { --tone-bg: #34560F; --tone-ink: #A4CD78; --tone-solid: #67AC1E; }
+  :root:not([data-theme="light"]) .tone-orange { --tone-bg: #752B02; --tone-ink: #F29968; --tone-solid: #EA5504; }
 }
 :root[data-theme="dark"] .tone-pink { --tone-bg: #701B36; --tone-ink: #EC86A7; --tone-solid: #E0356C; }
 :root[data-theme="dark"] .tone-blue { --tone-bg: #0F425F; --tone-ink: #78B5D8; --tone-solid: #1E83BE; }
 :root[data-theme="dark"] .tone-purple { --tone-bg: #472C57; --tone-ink: #BB9BCE; --tone-solid: #8E58AD; }
 :root[data-theme="dark"] .tone-lime { --tone-bg: #34560F; --tone-ink: #A4CD78; --tone-solid: #67AC1E; }
+:root[data-theme="dark"] .tone-orange { --tone-bg: #752B02; --tone-ink: #F29968; --tone-solid: #EA5504; }
 
-.action-grid .action[class*="tone-"] { box-shadow: inset 0 0 0 2px var(--tone-solid), var(--shadow); }
-.action-grid .action[class*="tone-"] .action-icon { background: var(--tone-bg); color: var(--tone-ink); }
+.action-grid .action[class*="tone-"], .action-wide[class*="tone-"] { box-shadow: inset 0 0 0 2px var(--tone-solid), var(--shadow); }
+.action-grid .action[class*="tone-"] .action-icon, .action-wide[class*="tone-"] .action-icon { background: var(--tone-bg); color: var(--tone-ink); }
 .ricon[class*="tone-"] { background: var(--tone-bg); color: var(--tone-ink); }
 .mode-pill { display: inline-block; margin-top: 8px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; padding: 4px 10px; border-radius: 999px; background: var(--tone-bg, var(--accent-soft)); color: var(--tone-ink, var(--accent-strong)); }
 .mode-pill:empty { display: none; }
