@@ -127,9 +127,9 @@
     ['1', '1', '1', '1', 'OK'].forEach(key);
     check('engineer tiles appear after sign in', await waitFor(() => !tile('USED').hidden && !tile('COUNT').hidden));
     check('My van switch appears straight after sign in, no reload', !$('whereSwitch').hidden);
-    check("engineers: the customer's tiles keep their place, engineer tiles beside and below them",
-      JSON.stringify(shownTiles()) === '["BOOK_IN","TO_VAN","CUSTOMER_FITTED","viewStockBtn","USED","COUNT"]' && !$('viewStockBtn').classList.contains('full') &&
-      tile('BOOK_IN').offsetTop === tile('TO_VAN').offsetTop && tile('USED').offsetTop > $('viewStockBtn').offsetTop, shownTiles());
+    check("engineers: Book in | Take to my van, then Used | Stock count, then the customer's We fitted | View stock at the bottom",
+      JSON.stringify(shownTiles()) === '["BOOK_IN","TO_VAN","USED","COUNT","CUSTOMER_FITTED","viewStockBtn"]' && !$('viewStockBtn').classList.contains('full') &&
+      tile('BOOK_IN').offsetTop === tile('TO_VAN').offsetTop && tile('USED').offsetTop < $('viewStockBtn').offsetTop, shownTiles());
     check('My van: Book in and Return to Ceva side by side', document.querySelector('[data-van-mode=BOOK_IN]').nextElementSibling === document.querySelector('[data-van-mode=RETURNED]') &&
       document.querySelector('[data-van-mode=BOOK_IN]').parentNode.classList.contains('action-grid'));
     check('recent activity has in/out icons', $('recentList').querySelectorAll('.ricon.in').length > 0);
