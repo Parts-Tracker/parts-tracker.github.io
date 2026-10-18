@@ -87,19 +87,13 @@ p { margin: 6px 0; }
 
 /* Actions */
 .action { font: inherit; color: var(--text); background: var(--surface); border: 0; border-radius: var(--radius); box-shadow: var(--shadow); cursor: pointer; text-align: left; }
-.action-main { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 84px; padding: 16px 18px; background: var(--accent); color: var(--accent-text); }
-.action-main .action-icon { background: rgba(255, 255, 255, 0.18); color: var(--accent-text); }
-.action-main .action-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.action-main .action-title { font-size: 1.15rem; font-weight: 700; }
-.action-main .action-sub { font-weight: 600; opacity: 1; }
-.chev { font-size: 2rem; line-height: 1; opacity: 0.9; }
-/* A full-width outlined tile below the grid (Take to my van, Return to Ceva) */
-.action-wide { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 72px; padding: 14px 18px; margin: 0 0 12px; }
-.action-wide .action-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.action-wide .chev { color: var(--tone-ink); }
+/* Book in: the one solid tile, the first thing to tap */
+.action-main { background: var(--accent); color: var(--accent-text); }
+.action-main .action-sub { font-weight: 600; opacity: 0.9; }
 .action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
 .action-grid .action { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 120px; padding: 14px; }
 .action-grid .action-icon { margin-bottom: 8px; }
+.action-grid .action.full { grid-column: 1 / -1; }   /* View stock for customers, who see three tiles */
 .action-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong); }
 .action-title { font-weight: 700; font-size: 1rem; }
 .action-sub { font-size: 0.82rem; color: inherit; opacity: 0.75; }
@@ -212,8 +206,9 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 :root[data-theme="dark"] .tone-lime { --tone-bg: #34560F; --tone-ink: #A4CD78; --tone-solid: #67AC1E; }
 :root[data-theme="dark"] .tone-orange { --tone-bg: #752B02; --tone-ink: #F29968; --tone-solid: #EA5504; }
 
-.action-grid .action[class*="tone-"], .action-wide[class*="tone-"] { box-shadow: inset 0 0 0 2px var(--tone-solid), var(--shadow); }
-.action-grid .action[class*="tone-"] .action-icon, .action-wide[class*="tone-"] .action-icon { background: var(--tone-bg); color: var(--tone-ink); }
+.action-grid .action[class*="tone-"] { box-shadow: inset 0 0 0 2px var(--tone-solid), var(--shadow); }
+.action-grid .action[class*="tone-"] .action-icon { background: var(--tone-bg); color: var(--tone-ink); }
+.action-grid .action-main[class*="tone-"] .action-icon { background: rgba(255, 255, 255, 0.18); color: var(--accent-text); }
 .ricon[class*="tone-"] { background: var(--tone-bg); color: var(--tone-ink); }
 .mode-pill { display: inline-block; margin-top: 8px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; padding: 4px 10px; border-radius: 999px; background: var(--tone-bg, var(--accent-soft)); color: var(--tone-ink, var(--accent-strong)); }
 .mode-pill:empty { display: none; }

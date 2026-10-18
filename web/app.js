@@ -199,6 +199,7 @@
     $('changeSite').hidden = !isEngineer();
     $('findPart').hidden = !isEngineer();
     document.querySelectorAll('.action[data-engineer]').forEach(b => { b.hidden = !isEngineer(); });
+    $('viewStockBtn').classList.toggle('full', !isEngineer());   // customers see three tiles: no gap next to View stock
     const need = isEngineer() && recountNeed(d);
     $('recountCard').hidden = !need;
     if (need) {

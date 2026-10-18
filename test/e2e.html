@@ -118,12 +118,20 @@
     const tile = m => document.querySelector('[data-mode=' + m + ']');
     check('customers do not see Change site, Find a part or count prompts', $('changeSite').hidden && $('findPart').hidden && $('recountCard').hidden);
     check('customers see only their tiles', tile('USED').hidden && tile('COUNT').hidden && tile('TO_VAN').hidden && !tile('CUSTOMER_FITTED').hidden && !tile('BOOK_IN').hidden);
+    const shownTiles = () => [...$('siteActions').children].filter(b => !b.hidden).map(b => b.dataset.mode || b.id);
+    check('customers: Book in and We fitted side by side, View stock full width underneath',
+      JSON.stringify(shownTiles()) === '["BOOK_IN","CUSTOMER_FITTED","viewStockBtn"]' && $('viewStockBtn').offsetWidth === $('siteActions').offsetWidth && tile('BOOK_IN').offsetWidth < $('siteActions').offsetWidth * 0.6, shownTiles());
     $('userChip').click();
     check('engineer sign in asks for a PIN', await waitFor(() => $('sheetTitle').textContent.includes('sign in')));
     const key = k => Array.from($('sheetBody').querySelectorAll('.keypad button')).find(b => b.textContent === k).click();
     ['1', '1', '1', '1', 'OK'].forEach(key);
     check('engineer tiles appear after sign in', await waitFor(() => !tile('USED').hidden && !tile('COUNT').hidden));
     check('My van switch appears straight after sign in, no reload', !$('whereSwitch').hidden);
+    check("engineers: the customer's tiles keep their place, engineer tiles beside and below them",
+      JSON.stringify(shownTiles()) === '["BOOK_IN","TO_VAN","CUSTOMER_FITTED","viewStockBtn","USED","COUNT"]' && !$('viewStockBtn').classList.contains('full') &&
+      tile('BOOK_IN').offsetTop === tile('TO_VAN').offsetTop && tile('USED').offsetTop > $('viewStockBtn').offsetTop, shownTiles());
+    check('My van: Book in and Return to Ceva side by side', document.querySelector('[data-van-mode=BOOK_IN]').nextElementSibling === document.querySelector('[data-van-mode=RETURNED]') &&
+      document.querySelector('[data-van-mode=BOOK_IN]').parentNode.classList.contains('action-grid'));
     check('recent activity has in/out icons', $('recentList').querySelectorAll('.ricon.in').length > 0);
     tile('USED').click();
     check('engineer signed in and scanner opened', await waitFor(() => visible('view-scan') && A.state.user && A.state.user.name === 'Test Engineer'));

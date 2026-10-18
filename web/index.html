@@ -59,12 +59,15 @@
         <button class="small hero-change" id="vanFindPart">Find a part</button>
       </div>
 
-      <button class="action action-main tone-green" data-van-mode="BOOK_IN">
-        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5 12 4l8.5 4.5v8L12 21l-8.5-4.5z"/><path d="M3.5 8.5 12 13l8.5-4.5M12 13v8"/></svg></span>
-        <span class="action-text"><span class="action-title">Book in to my van</span><span class="action-sub">Scan the parts from your ByBox delivery</span></span>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
       <div class="action-grid">
+        <button class="action action-main tone-green" data-van-mode="BOOK_IN">
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5 12 4l8.5 4.5v8L12 21l-8.5-4.5z"/><path d="M3.5 8.5 12 13l8.5-4.5M12 13v8"/></svg></span>
+          <span class="action-title">Book in to my van</span><span class="action-sub">Scan the parts from your ByBox delivery</span>
+        </button>
+        <button class="action tone-orange" data-van-mode="RETURNED">
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></span>
+          <span class="action-title">Return to Ceva</span><span class="action-sub">Unused parts dropped at a ByBox</span>
+        </button>
         <button class="action tone-pink" data-van-mode="USED">
           <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-.4-.4-2.6z"/></svg></span>
           <span class="action-title">Used on a job</span><span class="action-sub">From my van</span>
@@ -74,11 +77,6 @@
           <span class="action-title">Van stock count</span><span class="action-sub">Count everything in the van</span>
         </button>
       </div>
-      <button class="action action-wide tone-orange" data-van-mode="RETURNED">
-        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></span>
-        <span class="action-text"><span class="action-title">Return to Ceva</span><span class="action-sub">Unused parts dropped at a ByBox</span></span>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
 
       <div class="card" id="vanKitCard">
         <div class="kit-head">
@@ -119,19 +117,14 @@
         <button class="small primary" id="recountGo">Count now</button>
       </div>
 
-      <button class="action action-main tone-green" data-mode="BOOK_IN">
-        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5 12 4l8.5 4.5v8L12 21l-8.5-4.5z"/><path d="M3.5 8.5 12 13l8.5-4.5M12 13v8"/></svg></span>
-        <span class="action-text"><span class="action-title">Book in a delivery</span><span class="action-sub">Scan the parts that arrived</span></span>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
-      <div class="action-grid">
-        <button class="action tone-pink" data-mode="USED" data-engineer>
-          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-.4-.4-2.6z"/></svg></span>
-          <span class="action-title">Used on a job</span><span class="action-sub">With job number</span>
+      <div class="action-grid" id="siteActions">
+        <button class="action action-main tone-green" data-mode="BOOK_IN">
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5 12 4l8.5 4.5v8L12 21l-8.5-4.5z"/><path d="M3.5 8.5 12 13l8.5-4.5M12 13v8"/></svg></span>
+          <span class="action-title">Book in a delivery</span><span class="action-sub">Scan the parts that arrived</span>
         </button>
-        <button class="action tone-blue" data-mode="COUNT" data-engineer>
-          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12.5l2.2 2.2 4.8-4.8"/></svg></span>
-          <span class="action-title">Stock count</span><span class="action-sub">Count everything here</span>
+        <button class="action tone-orange" data-mode="TO_VAN" data-engineer>
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5h11v10h-11z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg></span>
+          <span class="action-title">Take to my van</span><span class="action-sub">Unused parts going with you</span>
         </button>
         <button class="action tone-purple" data-mode="CUSTOMER_FITTED">
           <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.7-5.5 7-5.5s6.2 1.9 7 5.5"/></svg></span>
@@ -141,12 +134,15 @@
           <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg></span>
           <span class="action-title">View stock</span><span class="action-sub" id="stockSummary"></span>
         </button>
+        <button class="action tone-pink" data-mode="USED" data-engineer>
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-.4-.4-2.6z"/></svg></span>
+          <span class="action-title">Used on a job</span><span class="action-sub">With job number</span>
+        </button>
+        <button class="action tone-blue" data-mode="COUNT" data-engineer>
+          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12.5l2.2 2.2 4.8-4.8"/></svg></span>
+          <span class="action-title">Stock count</span><span class="action-sub">Count everything here</span>
+        </button>
       </div>
-      <button class="action action-wide tone-orange" data-mode="TO_VAN" data-engineer>
-        <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5h11v10h-11z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg></span>
-        <span class="action-text"><span class="action-title">Take to my van</span><span class="action-sub">Unused parts going with you</span></span>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
       <div class="card">
         <h2 class="section-title">Recent activity</h2>
         <ul class="list" id="recentList"></ul>
