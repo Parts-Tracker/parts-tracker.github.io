@@ -33,7 +33,7 @@ const SHEETS = {
   Kits: ['Model', 'Part Number', 'Qty', 'Name'],   // Name is a lookup from the Parts tab, filled in by setup
   VanKit: ['Part Number', 'Min', 'Max', 'Name'],   // one van kit for every engineer
   Settings: ['Setting', 'Value', 'Notes'],
-  // Parts posted to a site from an engineer's van: not stock there until booked in, used or counted (or OnItsWayDays pass)
+  // Parts transferred (posted) to a site from an engineer's van: not stock there until booked in, used or counted (or OnItsWayDays pass)
   OnItsWay: ['ID', 'Posted', 'SiteID', 'Part Number', 'Qty', 'From', 'FromID', 'JobNo', 'Status', 'Closed', 'Note']
 };
 
@@ -50,7 +50,7 @@ const MOVEMENT_TYPES = {
   RETURNED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true },
   // Parts an engineer leaves at a site from their own van; the van's side is recorded as TO_SITE
   FROM_VAN: { sign: 1, roles: ['engineer', 'admin'], heldOnly: true },
-  // Parts posted from the engineer's van to a site (req.toSite): on the OnItsWay tab until they arrive
+  // Transfer: parts sent from the engineer's van to a site (req.toSite), on the OnItsWay tab until they arrive
   POSTED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true }
 };
 // Note on a USED line for a part that failed on fit: still used (a kit site gets it reordered), kept for a warranty claim
@@ -255,7 +255,7 @@ function actionSubmit(req) {
       // a part never booked in has nothing to take off, but everything scanned still arrives.
       const fromVan = type === 'FROM_VAN';
       const giver = fromVan ? vanCurrent : current, giverLoc = fromVan ? vanLoc : locId;
-      const outNote = { TO_VAN: 'To ' + by + "'s van", FROM_VAN: 'To ' + (site && site.Name), POSTED: 'Posted to ' + (dest && dest.Name), RETURNED: '' }[type];
+      const outNote = { TO_VAN: 'To ' + by + "'s van", FROM_VAN: 'To ' + (site && site.Name), POSTED: 'Transferred to ' + (dest && dest.Name), RETURNED: '' }[type];
       lines.forEach(l => {
         const held = Math.max(0, giver[l.family] || 0), take = Math.min(held, l.qty), short = l.qty - take;
         if (short) notHeld.push(l.family);
@@ -276,7 +276,7 @@ function actionSubmit(req) {
         // Used straight from the box before anyone booked it in: it arrives first, so stock doesn't go below zero
         if (spec.sign < 0 && (current[l.family] || 0) < l.qty) {
           arrived_(waiting, l.family, l.qty - Math.max(0, current[l.family] || 0), 'Used on arrival').forEach(a => {
-            row(l.family, l.family, a.qty, 'Arrived: posted by ' + a.from, locId, 'BOOK_IN');
+            row(l.family, l.family, a.qty, 'Arrived: sent by ' + a.from, locId, 'BOOK_IN');
             current[l.family] = (current[l.family] || 0) + a.qty;
           });
         }
@@ -724,7 +724,7 @@ function settleOnItsWay_(siteId) {
     waiting.filter(due).forEach(w => {
       rows.push({ MovementID: Utilities.getUuid(), Timestamp: now, SiteID: w.SiteID, Family: w.Family, ExactCode: w.Family, Qty: w.Qty, Type: 'BOOK_IN',
         JobNo: w.JobNo, By: w.From, Role: 'engineer', Device: 'On its way',
-        Note: 'Posted by ' + w.From + ' on ' + Utilities.formatDate(w.Posted, tz, 'd MMM') + '; not booked in after ' + days + ' days, so taken as arrived' });
+        Note: 'Sent by ' + w.From + ' on ' + Utilities.formatDate(w.Posted, tz, 'd MMM') + '; not booked in after ' + days + ' days, so taken as arrived' });
       arrived_([w], w.Family, w.Qty, 'Taken as arrived');
     });
     if (rows.length) appendObjects_('Movements', rows);
@@ -808,7 +808,7 @@ function recentMovements_(moves, names, limit) {
   return moves.slice(-limit).reverse().map(m => {
     const r = { at: iso_(m.row.Timestamp), family: m.family, name: names[m.family] || '', qty: m.qty, type: m.row.Type, by: m.row.By, jobNo: m.row.JobNo };
     const note = String(m.row.Note || '');
-    if (['FROM_SITE', 'TO_SITE', 'POSTED'].indexOf(r.type) >= 0) r.place = note.split(' — ')[0];   // "From <site>", "To <site>", "Posted to <site>"
+    if (['FROM_SITE', 'TO_SITE', 'POSTED'].indexOf(r.type) >= 0) r.place = note.split(' — ')[0];   // "From <site>", "To <site>", "Transferred to <site>"
     if (note.indexOf(FAILED_ON_FIT) === 0) r.failed = true;
     return r;
   });
@@ -1043,7 +1043,7 @@ const SETTINGS_DEFAULTS = [
   ['DaysNeeded', 7, 'Date Required Onsite = the day the order button is pressed + this many days.'],
   ['AppUrl', 'https://parts-tracker.github.io/', 'Parts Tracker web address. The order buttons go through its order.html page, which fills in the date.'],
   ['SurplusDays', 60, 'A part that is not in a site\'s Up Time Kit counts as surplus once it has been neither used nor delivered there for this many days.'],
-  ['OnItsWayDays', 7, 'A part posted to a site shows there as On its way until it is booked in, used or counted. After this many days it counts as arrived anyway.'],
+  ['OnItsWayDays', 7, 'A part transferred to a site from a van shows there as On its way until it is booked in, used or counted. After this many days it counts as arrived anyway.'],
   ['RecountDays', 90, 'Engineers are asked to count a site again this many days after its last stock count. Sites never counted, or with stock below zero, are always asked.'],
   ['ArchiveKeepDays', 365, 'archiveMovements keeps this many days of movements in full (at least 1). Older ones go to the archive spreadsheet, replaced by one carried-forward line per part.'],
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']

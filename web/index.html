@@ -56,7 +56,10 @@
         <div class="hero-label">My van <span class="updating" id="vanUpdating" hidden>Updating…</span></div>
         <h1 class="site-name" id="vanName"></h1>
         <div class="hero-address" id="vanSummary"></div>
-        <button class="small hero-change" id="vanFindPart">Find a part</button>
+        <div class="hero-buttons">
+          <button class="small hero-change" id="vanFindPart">Find a part</button>
+          <button class="small hero-change" id="vanTransfer">Transfer</button>
+        </div>
       </div>
 
       <div class="action-grid">
@@ -75,10 +78,6 @@
         <button class="action tone-blue" data-van-mode="COUNT">
           <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12.5l2.2 2.2 4.8-4.8"/></svg></span>
           <span class="action-title">Van stock count</span><span class="action-sub">Count everything in the van</span>
-        </button>
-        <button class="action tone-orange full" data-van-mode="POSTED">
-          <span class="action-icon"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3 10 14"/><path d="M21 3l-7 18-4-7-7-4z"/></svg></span>
-          <span class="action-title">Post to a site</span><span class="action-sub">Parts you are sending to a customer</span>
         </button>
       </div>
 

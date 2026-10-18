@@ -401,28 +401,29 @@
     await waitFor(() => visible('view-home'));
     document.querySelector('#whereSwitch [data-where=van]').click();
     await waitFor(() => visible('view-van'));
-    check('Post to a site: full-width orange button under the four on My van', document.querySelector('[data-van-mode=POSTED]').classList.contains('full') && document.querySelector('[data-van-mode=POSTED]').classList.contains('tone-orange'));
-    document.querySelector('[data-van-mode=POSTED]').click();
-    check('Post to a site asks which site first', await waitFor(() => $('sheetTitle').textContent === 'Post to which site?' && $('sheetBody').querySelectorAll('.pick').length === 2));
+    check('Transfer: a small button beside Find a part, not one of the big tiles', !$('vanTransfer').hidden && $('vanTransfer').parentNode === $('vanFindPart').parentNode && !document.querySelector('[data-van-mode=POSTED]') &&
+      document.querySelectorAll('#view-van .action-grid .action').length === 4);
+    $('vanTransfer').click();
+    check('Transfer asks which site first', await waitFor(() => $('sheetTitle').textContent === 'Transfer to which site?' && $('sheetBody').querySelectorAll('.pick').length === 2));
     [...$('sheetBody').querySelectorAll('.pick')].find(b => /Sample Print/.test(b.textContent)).click();
-    check('the scanner names the site', await waitFor(() => visible('view-scan') && $('scanTitle').textContent === 'Post to Sample Print Co' && $('view-scan').classList.contains('tone-orange')), $('scanTitle').textContent);
+    check('the scanner names the site', await waitFor(() => visible('view-scan') && $('scanTitle').textContent === 'Transfer to Sample Print Co' && $('view-scan').classList.contains('tone-orange')), $('scanTitle').textContent);
     A.handleCode('P059K6158X', 'barcode');
     A.handleCode('P807E5651X', 'barcode');   // not in the van
     $('scanNext').click(); await waitFor(() => visible('view-review'));
-    check('posting: optional call number, warning for a part not in the van', !$('jobCard').hidden && /optional/.test($('jobLabel').textContent) && /Not in your van stock\. They are still posted/.test($('reviewWarn').textContent) && /IBT Drive Gear/.test($('reviewWarn').textContent), $('reviewWarn').textContent);
+    check('transfer: optional call number, warning for a part not in the van', !$('jobCard').hidden && /optional/.test($('jobLabel').textContent) && /Not in your van stock\. They are still sent/.test($('reviewWarn').textContent) && /IBT Drive Gear/.test($('reviewWarn').textContent), $('reviewWarn').textContent);
     $('jobNo').value = 'C6001';
     const vanRollsBeforePost = stockOf('VAN-E01', 'P059K6158X'), siteRollsBeforePost = stockOf(site.SiteID, 'P059K6158X');
     $('reviewSend').click();
-    check('posted', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Posted' && /posted to Sample Print Co\. They show there as on their way/.test($('doneText').textContent)) && await saved(), $('doneText').textContent);
+    check('transferred', await waitFor(() => visible('view-done') && $('doneTitle').textContent === 'Transferred' && /transferred to Sample Print Co\. They show there as on their way/.test($('doneText').textContent)) && await saved(), $('doneText').textContent);
     const ways = () => rows('OnItsWay').filter(w => w.Status === 'On its way');
-    check('posting takes the part off the van and puts both on their way to the site, not into its stock',
-      stockOf('VAN-E01', 'P059K6158X') === vanRollsBeforePost - 1 && rows('Movements').some(m => m.Type === 'POSTED' && m.SiteID === 'VAN-E01' && /Posted to Sample Print Co/.test(m.Note)) &&
+    check('a transfer takes the part off the van and puts both on their way to the site, not into its stock',
+      stockOf('VAN-E01', 'P059K6158X') === vanRollsBeforePost - 1 && rows('Movements').some(m => m.Type === 'POSTED' && m.SiteID === 'VAN-E01' && /Transferred to Sample Print Co/.test(m.Note)) &&
       ways().length === 2 && ways().every(w => w.SiteID === site.SiteID && w.From === 'Test Engineer' && w.JobNo === 'C6001' && Number(w.Qty) === 1) && stockOf(site.SiteID, 'P059K6158X') === siteRollsBeforePost, rows('OnItsWay'));
     $('doneHome').click();
-    check('van history says where it was posted', await waitFor(() => visible('view-van') && /Posted to Sample Print Co/.test($('vanRecentList').textContent)), $('vanRecentList').textContent);
+    check('van history says where it was transferred', await waitFor(() => visible('view-van') && /Transferred to Sample Print Co/.test($('vanRecentList').textContent)), $('vanRecentList').textContent);
     document.querySelector('#whereSwitch [data-where=site]').click();
     await A.loadSite();
-    check('the site page lists what is on its way, with who posted it', await waitFor(() => !$('onItsWayCard').hidden && $('onItsWayList').children.length === 2 && /posted by Test Engineer · call C6001/.test($('onItsWayList').textContent)), $('onItsWayList').textContent);
+    check('the site page lists what is on its way, with who posted it', await waitFor(() => !$('onItsWayCard').hidden && $('onItsWayList').children.length === 2 && /sent by Test Engineer · call C6001/.test($('onItsWayList').textContent)), $('onItsWayList').textContent);
     // The customer books the box in when it arrives: counted once, and no longer on its way
     call({ action: 'submit', site: site.Token, batchId: 'ow-1', type: 'BOOK_IN', items: [{ code: 'P059K6158X', qty: 1 }] });
     check('booking a posted part in counts it once and clears it from on its way', stockOf(site.SiteID, 'P059K6158X') === siteRollsBeforePost + 1 &&
@@ -430,7 +431,7 @@
     // The attending engineer fits the other straight from the box, before anyone books it in
     const fitted = call({ action: 'submit', site: site.Token, session: A.state.session, batchId: 'ow-2', type: 'USED', jobNo: 'J7001', items: [{ code: 'P807E5651X', qty: 1 }] });
     check('used straight from the box: it arrives first, so stock never goes below zero', fitted.ok && fitted.belowZero.length === 0 && stockOf(site.SiteID, 'P807E5651X') === 0 &&
-      rows('Movements').some(m => m.Type === 'BOOK_IN' && m.Family === 'P807E5651X' && /Arrived: posted by Test Engineer/.test(m.Note)) && ways().length === 0, fitted);
+      rows('Movements').some(m => m.Type === 'BOOK_IN' && m.Family === 'P807E5651X' && /Arrived: sent by Test Engineer/.test(m.Note)) && ways().length === 0, fitted);
     // Found by a stock count: no extra stock later
     const vanCall = (type, items, extra) => call(Object.assign({ action: 'submit', van: true, session: A.state.session, batchId: 'ow-' + Math.random(), type, items }, extra || {}));
     vanCall('POSTED', [{ code: 'P053K9189X', qty: 2 }], { toSite: otherSite.Token });

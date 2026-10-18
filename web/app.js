@@ -13,10 +13,10 @@
     TO_VAN: { title: 'Take to my van', hint: 'Scan each unused part you are taking with you.', engineer: true, done: 'Taken to your van' },
     FROM_VAN: { title: 'Book in from my van', engineer: true, done: 'Left at the site' }   // Book in, "From my van"
   };
-  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva', FROM_VAN: 'From a van', TO_SITE: 'Left at a site', POSTED: 'Posted to a site' };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva', FROM_VAN: 'From a van', TO_SITE: 'Left at a site', POSTED: 'Transferred to a site' };
   // Each action has its own brand colour (see the tone-* classes in app.css)
   const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue', TO_VAN: 'orange', FROM_SITE: 'orange', RETURNED: 'orange', FROM_VAN: 'green', TO_SITE: 'orange', POSTED: 'orange' };
-  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva', POSTED: 'Post to a site', FROM_VAN: 'Book in' };
+  const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva', POSTED: 'Transfer', FROM_VAN: 'Book in' };
   // Parts that leave only if they are on record where they are (as the server does it)
   const HELD_ONLY = ['TO_VAN', 'RETURNED', 'POSTED', 'FROM_VAN'];
   // Records that change a site and a van at once
@@ -219,7 +219,7 @@
     coming.forEach(w => ow.append(el('li', {},
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, w.name || partName(w.family) || w.family),
-        el('div', { class: 'item-sub' }, ['posted by ' + w.by, w.jobNo ? 'call ' + w.jobNo : '', when(w.at)].filter(Boolean).join(' · '))),
+        el('div', { class: 'item-sub' }, ['sent by ' + w.by, w.jobNo ? 'call ' + w.jobNo : '', when(w.at)].filter(Boolean).join(' · '))),
       el('div', { class: 'qty' }, '×' + w.qty))));
     renderRecent($('recentList'), d.recent);
     renderBanner();
@@ -453,7 +453,7 @@
     state.mode = mode;
     state.basket = [];
     const words = state.where === 'van' ? VAN_MODES[mode] : MODES[mode];
-    $('scanTitle').textContent = mode === 'POSTED' ? 'Post to ' + state.postTo.name : words.title;
+    $('scanTitle').textContent = mode === 'POSTED' ? 'Transfer to ' + state.postTo.name : words.title;
     setPill('scanPill', mode);
     $('view-scan').className = 'view tone-' + TONES[mode];
     $('scanHint').textContent = words.hint;
@@ -632,7 +632,7 @@
   // ---------- Review and send ----------
   function openReview() {
     const mode = state.mode;
-    $('reviewTitle').textContent = mode === 'POSTED' ? 'Post to ' + state.postTo.name : (state.where === 'van' ? VAN_MODES[mode] : MODES[mode]).title;
+    $('reviewTitle').textContent = mode === 'POSTED' ? 'Transfer to ' + state.postTo.name : (state.where === 'van' ? VAN_MODES[mode] : MODES[mode]).title;
     setPill('reviewPill', mode);
     // Engineers booking in at a site: a delivery, or parts from their own van
     $('sourceCard').hidden = !(mode === 'BOOK_IN' && state.where === 'site' && isEngineer());
@@ -695,7 +695,7 @@
     if (notHeld.length) box.append(el('p', {}, {
       TO_VAN: 'Not on record at this site. They still go into your van, and the site\'s stock is not changed:',
       RETURNED: 'Not in your van stock, so nothing is taken off for:',
-      POSTED: 'Not in your van stock. They are still posted, and your van\'s stock is not changed:',
+      POSTED: 'Not in your van stock. They are still sent, and your van\'s stock is not changed:',
       FROM_VAN: 'Not in your van stock. They still go on the site, and your van\'s stock is not changed:'
     }[mode]), el('ul', {}, notHeld.map(t => el('li', {}, t))));
     if (kitShort.length) box.append(el('p', {}, 'This leaves the site\'s Up Time Kit short:'), el('ul', {}, kitShort.map(t => el('li', {}, t))),
@@ -754,7 +754,7 @@
     const t = batch.type;
     if (t === 'TO_VAN') return where === 'van' ? [1, false, 'FROM_SITE', 'From ' + batch.siteName] : [-1, true, t];
     if (t === 'FROM_VAN') return where === 'van' ? [-1, true, 'TO_SITE', 'To ' + batch.siteName] : [1, false, t];
-    if (t === 'POSTED') return [-1, true, t, 'Posted to ' + batch.toSiteName];
+    if (t === 'POSTED') return [-1, true, t, 'Transferred to ' + batch.toSiteName];
     return [{ BOOK_IN: 1, USED: -1, CUSTOMER_FITTED: -1, RETURNED: -1 }[t] || 0, t === 'RETURNED', t];
   }
   function applyTo(target, batch, where) {
@@ -788,7 +788,7 @@
       : batch.type === 'TO_VAN' ? parts + ' taken from ' + batch.siteName + ' into your van.'
       : batch.type === 'RETURNED' ? parts + ' sent back to Ceva from your van.'
       : batch.type === 'FROM_VAN' ? parts + ' moved from your van to ' + batch.siteName + '.'
-      : batch.type === 'POSTED' ? parts + ' posted to ' + batch.toSiteName + '. They show there as on their way until booked in.'
+      : batch.type === 'POSTED' ? parts + ' transferred to ' + batch.toSiteName + '. They show there as on their way until booked in.'
       : parts + ' recorded at ' + batch.siteName + '.';
     $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
     $('doneStatus').textContent = 'Sending…';
@@ -909,7 +909,7 @@
     USED: { title: 'Used on a job', hint: 'Scan each part you fitted from your van.' },
     COUNT: { title: 'Van stock count', hint: 'Scan everything in the van. Use + when there is more than one.' },
     RETURNED: { title: 'Return to Ceva', hint: 'Scan each unused part as you drop it at the ByBox.', done: 'Returned to Ceva' },
-    POSTED: { title: 'Post to a site', hint: 'Scan each part you are posting.', done: 'Posted' }
+    POSTED: { title: 'Transfer to a site', hint: 'Scan each part you are sending.', done: 'Transferred' }
   };
   const cur = () => (state.where === 'van' ? state.van : state.data);
 
@@ -1861,11 +1861,9 @@
     renderThemeButton();
     $('userChip').addEventListener('click', () => state.user ? signOut() : askPin(null));
     document.querySelectorAll('.action[data-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'site'; startMode(b.dataset.mode); }));
-    document.querySelectorAll('.action[data-van-mode]').forEach(b => b.addEventListener('click', () => {
-      state.where = 'van';
-      if (b.dataset.vanMode !== 'POSTED') return startMode(b.dataset.vanMode);
-      chooseSite(s => { state.postTo = s; state.where = 'van'; startMode('POSTED'); }, 'Post to which site?');
-    }));
+    document.querySelectorAll('.action[data-van-mode]').forEach(b => b.addEventListener('click', () => { state.where = 'van'; startMode(b.dataset.vanMode); }));
+    // Transfer (rare): parts sent from the van to a site, picked from the site list first
+    $('vanTransfer').addEventListener('click', () => chooseSite(s => { state.postTo = s; state.where = 'van'; startMode('POSTED'); }, 'Transfer to which site?'));
     document.querySelectorAll('#whereSwitch button').forEach(b => b.addEventListener('click', () => {
       if (b.dataset.where === 'van') openVan(); else { state.where = 'site'; goHome(); }
     }));
