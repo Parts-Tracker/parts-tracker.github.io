@@ -52,5 +52,11 @@
     return [...out];
   }
 
-  window.PTCodes = { normalise, findCandidates, findFragments };
+  // Families exactly one character different from this one (a misread barcode: P053V0668X for P053K0668X)
+  function oneOff(family, families) {
+    return [...families].filter(f => f.length === family.length && f !== family &&
+      [...f].reduce((n, ch, i) => n + (ch !== family[i]), 0) === 1);
+  }
+
+  window.PTCodes = { normalise, findCandidates, findFragments, oneOff };
 })();

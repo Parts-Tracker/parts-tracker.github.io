@@ -93,6 +93,7 @@ const ACTIONS = {
   van: actionVan,
   sites: actionSites,
   reviewPart: actionReviewPart,
+  rejectPart: actionRejectPart,
   siteSave: actionSiteSave,
   machineAdd: actionMachineAdd,
   machineMove: actionMachineMove,
@@ -672,6 +673,55 @@ function actionReviewPart(req) {
   if (name) sh.getRange(part._row, col_('Parts', 'Name')).setValue(name);
   sh.getRange(part._row, col_('Parts', 'Reviewed')).setValue(true);
   return { family: part.Family, name: name || part.Name };
+}
+
+/**
+ * Admin rejects a part added from a scan with a wrong code (e.g. a misread barcode). Stock recorded under it at
+ * any site or van moves to the real part (req.replaceWith), or is taken off if it was not a real part, with
+ * WRONG_CODE lines; parts on their way under it become the real part, or are cancelled. Its Parts row is then
+ * deleted, so the wrong code is not offered again. req: { session, family, replaceWith? }
+ */
+function actionRejectPart(req) {
+  const user = requireAdmin_(req);
+  const family = String(req.family || '');
+  const moved = withLock_(() => {
+    const parts = readTable_('Parts');
+    const part = parts.find(p => p.Family === family);
+    if (!part) throw err_('bad_request', 'That part is not in the parts list.');
+    if (isTrue_(part.Reviewed)) throw err_('bad_request', 'Only new parts still to check can be rejected.');
+    const to = req.replaceWith ? parts.find(p => p.Family === normaliseCode(req.replaceWith).family) : null;
+    if (req.replaceWith && (!to || to.Family === family)) throw err_('bad_request', 'Pick the real part from the parts list.');
+    if (['Kits', 'VanKit'].some(t => readTable_(t).some(k => String(k.Family) === family))) {
+      throw err_('bad_request', family + ' is on a kit list. Take it off the Kits or VanKit tab first.');
+    }
+    const now = new Date(), batch = Utilities.getUuid();
+    const rows = [];
+    const row = (loc, f, qty, note) => rows.push({
+      MovementID: Utilities.getUuid(), Timestamp: now, SiteID: loc, Family: f, ExactCode: f, Qty: qty, Type: 'WRONG_CODE',
+      JobNo: '', By: user.Name, Role: 'admin', Device: 'Admin panel', Note: note, BatchID: batch
+    });
+    const stockAt = stockAll_();
+    let qtyMoved = 0;
+    Object.keys(stockAt).forEach(loc => {
+      const qty = stockAt[loc][family] || 0;
+      if (!qty) return;
+      qtyMoved += qty;
+      row(loc, family, -qty, to ? 'Wrong code: really ' + to.Family + ' ' + to.Name : 'Wrong code: not a real part');
+      if (to) row(loc, to.Family, qty, 'Booked as ' + family + ' (wrong code)');
+    });
+    appendObjects_('Movements', rows);
+    onItsWay_().filter(w => w.Family === family).forEach(w => {
+      const sh = sheet_('OnItsWay');
+      if (to) sh.getRange(w._row, col_('OnItsWay', 'Part Number')).setValue(to.Family);
+      else {
+        sh.getRange(w._row, col_('OnItsWay', 'Status')).setValue('Cancelled: wrong code');
+        sh.getRange(w._row, col_('OnItsWay', 'Closed')).setValue(now);
+      }
+    });
+    sheet_('Parts').deleteRow(part._row);
+    return qtyMoved;
+  });
+  return { family: family, moved: moved, admin: actionAdmin(req) };
 }
 
 // ---------------------------------------------------------------- parts on their way to a site

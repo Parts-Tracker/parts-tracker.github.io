@@ -87,7 +87,15 @@
     A.handleCode('P059K6158X', 'barcode');
     A.handleCode('053K 91890', 'barcode');
     check('known parts added by name, repeats counted', A.state.basket.length === 2 && A.state.basket[0].qty === 2 && A.state.basket[0].name === 'Tray 1/2 Feed Roll', A.state.basket);
+    A.handleCode('FFB053V91890', 'barcode');
+    const nearPick = await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list') && $('sheetBody').querySelector('.near-parts .pick');
+    check('a code one character off a known part offers it', nearPick && /Did you mean/.test($('sheetBody').textContent) && /Filter/.test(nearPick.textContent) && /P053K9189X/.test(nearPick.textContent), $('sheetBody').textContent);
+    nearPick.click();
+    const filterLine = A.state.basket.find(b => b.family === 'P053K9189X');
+    check('picking it adds the known part, not a new one', $('sheet').classList.contains('hidden') && filterLine.qty === 2 && !A.state.basket.some(b => b.isNew), A.state.basket);
+    filterLine.qty = 1;
     A.handleCode('FFB999K12345', 'barcode');
+    check('a code not near any part offers nothing', await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list') && !$('sheetBody').querySelector('.near-parts'));
     check('unknown part asks for a name', await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list'));
     check('unknown part buzzes twice', buzz[buzz.length - 1] === '[70,60,70]', buzz);
     $('sheetBody').querySelector('input').value = 'Test Widget';
@@ -667,6 +675,53 @@
     check('approving marks it reviewed with the corrected name', await waitFor(() => { const p = rows('Parts').find(x => x.Family === 'P999K1234X'); return p && isTrue_(p.Reviewed) && p.Name === 'Test Widget Assembly'; }));
     check('figure drops to 0 and the list closes', await waitFor(() => $('admin-new').hidden && !$('admin-find').hidden && ![...$('adminStats').querySelectorAll('button.stat')].some(b => /new part/.test(b.textContent)) && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
     check('admin data no longer counts it', call({ action: 'admin', session: A.state.session }).unreviewedParts === 0);
+
+    // Reject a new part with a misread code: its stock (site, van, on its way) moves to the real part
+    const e01 = rows('Users').find(u => u.UserID === 'E01'), e01Van = vanId_(e01);
+    const wrongFam = 'P053V9189X', real = 'P053K9189X';
+    appendObjects_('Parts', [{ Family: wrongFam, Name: 'Filter (typo)', ExactCodes: wrongFam, Reviewed: false, AddedBy: 'Test Engineer', AddedAt: new Date() }]);
+    const wrongMv = (loc, qty) => ({ MovementID: Utilities.getUuid(), Timestamp: new Date(), SiteID: loc, Family: wrongFam, ExactCode: wrongFam, Qty: qty, Type: 'BOOK_IN', By: 'Test Engineer', Role: 'engineer' });
+    appendObjects_('Movements', [wrongMv(site.SiteID, 2), wrongMv(e01Van, 1)]);
+    appendObjects_('OnItsWay', [{ ID: 'ow-wrongFam', Posted: new Date(), SiteID: site.SiteID, Family: wrongFam, Qty: 1, From: 'Test Engineer', FromID: e01Van, Status: 'On its way' }]);
+    const realSite = stockOf(site.SiteID, real), realVan = stockOf(e01Van, real);
+    $('adminRefresh').click();
+    const badTile = await waitFor(() => [...$('adminStats').querySelectorAll('button.stat')].find(b => /new part/.test(b.textContent)));
+    badTile.click();
+    const badCard = await waitFor(() => !$('admin-new').hidden && $('newPartList').querySelector('.new-part'));
+    check('new part card says where its stock is, vans included', /At Sample Print Co \(2\), Test Engineer's van \(1\)/.test(badCard.textContent), badCard.textContent);
+    [...badCard.querySelectorAll('button')].find(b => /Reject/.test(b.textContent)).click();
+    check('reject asks which part it really was, near codes first', $('sheetTitle').textContent === 'Reject ' + wrongFam + '?' && /one character different/.test($('sheetBody').textContent) && $('sheetBody').querySelector('.pick') && /P053K9189X/.test($('sheetBody').querySelector('.pick').textContent), $('sheetBody').textContent);
+    const rjSearch = $('sheetBody').querySelector('input');
+    rjSearch.value = 'feed roll'; rjSearch.dispatchEvent(new Event('input'));
+    check('reject search finds parts by name and leaves out new parts', /Tray 1\/2 Feed Roll/.test($('sheetBody').textContent) && ![...$('sheetBody').querySelectorAll('.pick')].some(b => b.textContent.includes(wrongFam)));
+    $('sheetBody').querySelector('.pick').click();
+    check('confirm says what moves where', $('sheetTitle').textContent === 'It was really Filter' && /Sample Print Co \(2\)/.test($('sheetBody').textContent) && /van \(1\)/.test($('sheetBody').textContent), $('sheetBody').textContent);
+    [...$('sheetBody').querySelectorAll('button')].find(b => b.textContent === 'Reject and use Filter').click();
+    check('rejected part comes off the parts list', await waitFor(() => !rows('Parts').some(p => p.Family === wrongFam)), rows('Parts').map(p => p.Family));
+    check('its stock moves to the real part at the site and in the van', stockOf(site.SiteID, wrongFam) === 0 && stockOf(e01Van, wrongFam) === 0 && stockOf(site.SiteID, real) === realSite + 2 && stockOf(e01Van, real) === realVan + 1);
+    const wrongRows = rows('Movements').filter(m => m.Type === 'WRONG_CODE');
+    check('the change is recorded as WRONG_CODE lines by the admin, old lines kept', wrongRows.length === 4 && wrongRows.every(m => m.By === 'Test Admin') && rows('Movements').filter(m => m.Family === wrongFam && m.Type === 'BOOK_IN').length === 2, wrongRows);
+    check('a part on its way under the wrong code becomes the real part', rows('OnItsWay').find(w => w.ID === 'ow-wrongFam').Family === real && rows('OnItsWay').find(w => w.ID === 'ow-wrongFam').Status === 'On its way');
+    check('list closes and the figure drops to 0', await waitFor(() => $('admin-new').hidden && $('sheet').classList.contains('hidden') && $('adminStats').children[3].querySelector('.stat-value').textContent === '0'));
+    const owSheetRow = rows('OnItsWay').find(w => w.ID === 'ow-wrongFam');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('OnItsWay').getRange(owSheetRow._row, col_('OnItsWay', 'Status')).setValue('Test done');
+    // Not a real part: stock under it is taken off; approved, kit and engineer requests are refused
+    appendObjects_('Parts', [{ Family: 'P111K1111X', Name: 'Junk', Reviewed: false }]);
+    appendObjects_('Movements', [Object.assign(wrongMv(site.SiteID, 1), { Family: 'P111K1111X', ExactCode: 'P111K1111X' })]);
+    check('engineers cannot reject parts', call({ action: 'rejectPart', session: call({ action: 'login', site: site.Token, pin: '1111' }).session, family: 'P111K1111X' }).code === 'forbidden');
+    check('reject needs a real part from the list to move stock to', /Pick the real part/.test(call({ action: 'rejectPart', session: A.state.session, family: 'P111K1111X', replaceWith: 'P222K2222X' }).error));
+    check('approved parts cannot be rejected', /still to check/.test(call({ action: 'rejectPart', session: A.state.session, family: real }).error));
+    const junk = call({ action: 'rejectPart', session: A.state.session, family: 'P111K1111X' });
+    check('not a real part: removed and its stock taken off', junk.ok && junk.moved === 1 && !rows('Parts').some(p => p.Family === 'P111K1111X') && stockOf(site.SiteID, 'P111K1111X') === 0 && junk.admin.unreviewedParts === 0, junk);
+    appendObjects_('Parts', [{ Family: 'P222K2222X', Name: 'Kit thing', Reviewed: false }]);
+    appendObjects_('Kits', [{ Model: 'TESTKIT', Family: 'P222K2222X', Qty: 1 }]);
+    check('a part on a kit list cannot be rejected', /kit list/.test(call({ action: 'rejectPart', session: A.state.session, family: 'P222K2222X' }).error) && rows('Parts').some(p => p.Family === 'P222K2222X'));
+    const kitSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Kits');
+    kitSh.deleteRow(rows('Kits').find(k => k.Model === 'TESTKIT')._row);
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').deleteRow(rows('Parts').find(p => p.Family === 'P222K2222X')._row);
+    A.showAdminTab('find');
+    $('adminRefresh').click();
+    await waitFor(() => $('adminStats').children[3] && $('adminStats').children[3].querySelector('.stat-value').textContent === '0');
 
     // ---- Daily Up Time Kit email: kit parts used at kit sites, with an order-form button per site ----
     const kitRows = rows('Kits');

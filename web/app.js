@@ -13,7 +13,7 @@
     TO_VAN: { title: 'Take to my van', hint: 'Scan each unused part you are taking with you.', engineer: true, done: 'Taken to your van' },
     FROM_VAN: { title: 'Book in from my van', engineer: true, done: 'Left at the site' }   // Book in, "From my van"
   };
-  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva', FROM_VAN: 'From a van', TO_SITE: 'Left at a site', POSTED: 'Transferred to a site' };
+  const TYPE_LABEL = { BOOK_IN: 'Booked in', USED: 'Used', CUSTOMER_FITTED: 'Customer fitted', COUNT: 'Count', MOVED_IN: 'Moved in with a machine', MOVED_OUT: 'Moved out with a machine', CARRIED_FORWARD: 'Carried forward (older history archived)', KIT_ADJUST: 'Assumed kit corrected', TO_VAN: 'Taken to a van', FROM_SITE: 'From a site', RETURNED: 'Returned to Ceva', FROM_VAN: 'From a van', TO_SITE: 'Left at a site', POSTED: 'Transferred to a site', WRONG_CODE: 'Wrong part code corrected' };
   // Each action has its own brand colour (see the tone-* classes in app.css)
   const TONES = { BOOK_IN: 'green', USED: 'pink', CUSTOMER_FITTED: 'purple', COUNT: 'blue', TO_VAN: 'orange', FROM_SITE: 'orange', RETURNED: 'orange', FROM_VAN: 'green', TO_SITE: 'orange', POSTED: 'orange' };
   const PILL = { BOOK_IN: 'Book in', USED: 'Used on a job', CUSTOMER_FITTED: 'Fitted by site', COUNT: 'Stock count', TO_VAN: 'Take to my van', RETURNED: 'Return to Ceva', POSTED: 'Transfer', FROM_VAN: 'Book in' };
@@ -502,10 +502,15 @@
   function confirmNewPart(n, source) {
     const name = el('input', { class: 'input', placeholder: 'Part name from the box', maxlength: '120', autocomplete: 'off' });
     const err = el('div', { class: 'error', hidden: true }, 'Enter the part name from the box.');
+    // A barcode read one character wrong looks like a new part: offer the known parts it nearly matches
+    const near = C.oneOff(n.family, state.parts.keys()).map(f => state.parts.get(f));
     openSheet('Not in the parts list', [
       el('p', { class: 'muted' }, source === 'text' ? 'Read from the label text. Check every character against the box:' : 'Check every character against the box:'),
       el('div', { class: 'big-code' }, n.exact),
       n.warning ? el('div', { class: 'warn' }, 'This does not look like a normal part code. Only add it if it matches the box exactly.') : null,
+      near.length ? el('div', { class: 'near-parts' }, el('p', { class: 'muted' }, 'Did you mean:'),
+        near.map(p => el('button', { class: 'pick', onclick: () => { closeSheet(); handleCode(p.family, source); } },
+          el('span', {}, el('span', { class: 'item-name' }, p.name), el('span', { class: 'item-sub mono' }, p.family))))) : null,
       el('label', { class: 'muted' }, 'Part name', name),
       err,
       el('div', { class: 'buttons' },
@@ -1436,7 +1441,7 @@
     list.forEach(p => {
       const name = el('input', { class: 'input', value: p.name === 'Unnamed part' ? '' : p.name, placeholder: 'Part name', 'aria-label': 'Name for ' + p.family });
       const err = el('div', { class: 'error', hidden: true });
-      const held = holdersOf(p.family).filter(h => h.qty > 0).map(h => admin.data.sites[h.site].name + ' (' + h.qty + ')');
+      const held = heldAt(p.family);
       const codes = p.codes.split(/[\s,]+/).filter(c => c && c !== p.family);
       const approve = el('button', { class: 'btn primary', onclick: async () => {
         if (!name.value.trim()) { err.textContent = 'Type the part name from the box first.'; err.hidden = false; name.focus(); return; }
@@ -1457,14 +1462,67 @@
           err.textContent = e.code === 'offline' ? 'No connection. Approving needs signal.' : e.message; err.hidden = false;
         }
       } }, 'Approve');
+      const reject = el('button', { class: 'btn danger', onclick: () => openRejectPart(p) }, 'Reject: wrong code');
       out.append(el('div', { class: 'card new-part' },
         el('div', { class: 'item-name mono' }, p.family),
         el('div', { class: 'item-sub' }, [codes.length ? 'Box code ' + codes.join(', ') : '', p.addedBy ? 'added by ' + p.addedBy : '', p.addedAt ? when(p.addedAt) : ''].filter(Boolean).join(' · ')),
-        el('div', { class: 'item-sub' }, held.length ? 'At ' + held.join(', ') : 'Not at any site'),
+        el('div', { class: 'item-sub' }, held.length ? 'At ' + held.join(', ') : 'Not at any site or van'),
         el('label', { class: 'field' }, 'Name', name),
         err,
-        approve));
+        approve, reject));
     });
+  }
+  /** Where stock of a part is recorded, sites then vans: ["Leeds Graphic Press (1)", "Justin's van (2)"]. */
+  function heldAt(family) {
+    return holdersOf(family).filter(h => h.qty > 0).map(h => admin.data.sites[h.site].name + ' (' + h.qty + ')')
+      .concat(vanHoldersOf(family).map(h => h.van.name + "'s van (" + h.qty + ')'));
+  }
+
+  /** Reject a new part whose code is wrong: pick the part it really was (codes one character off first), or none. */
+  function openRejectPart(p) {
+    const isNew = new Set(admin.data.newParts.map(x => x.family));
+    const known = [...admin.parts.values()].filter(x => !isNew.has(x.family));
+    const near = C.oneOff(p.family, known.map(x => x.family)).map(f => admin.parts.get(f));
+    const pick = x => el('button', { class: 'pick', onclick: () => confirmReject(p, x) },
+      el('span', {}, el('span', { class: 'item-name' }, x.name), el('span', { class: 'item-sub mono' }, x.family)));
+    const input = el('input', { class: 'input', placeholder: 'Search by part name or code', autocomplete: 'off' });
+    const results = el('div', {});
+    input.addEventListener('input', () => {
+      results.textContent = '';
+      const q = input.value.trim();
+      if (!q) return;
+      const list = matchParts(new Map(known.map(x => [x.family, x])), q);
+      list.slice(0, 20).forEach(x => results.append(pick(x)));
+      if (!list.length) results.append(el('p', { class: 'muted' }, 'No parts match.'));
+    });
+    openSheet('Reject ' + p.family + '?', [
+      el('p', { class: 'muted' }, 'Use this when the code is wrong, for example a misread barcode. ' + p.family + ' comes off the parts list.'),
+      el('p', { class: 'muted' }, 'Which part was it really? Stock recorded under ' + p.family + ' moves to that part.'),
+      near.length ? [el('p', { class: 'muted' }, 'Codes one character different:'), ...near.map(pick)] : null,
+      input, results,
+      el('div', { class: 'buttons' },
+        el('button', { onclick: () => confirmReject(p, null) }, 'Not a real part'),
+        el('button', { onclick: closeSheet }, 'Cancel'))
+    ]);
+  }
+
+  function confirmReject(p, to) {
+    const held = heldAt(p.family);
+    const err = el('div', { class: 'error', hidden: true });
+    const go = el('button', { class: to ? 'primary' : 'danger', onclick: async () => {
+      const r = await adminChange({ action: 'rejectPart', family: p.family, replaceWith: to ? to.family : '' }, err, go);
+      if (!r) return;
+      closeSheet();
+      toast('Rejected ' + p.family + (to ? ': now ' + to.name : ''));
+      if (!admin.data.newParts.length) showAdminTab(tabBeforeNew);
+    } }, to ? 'Reject and use ' + to.name : 'Reject and remove');
+    openSheet(to ? 'It was really ' + to.name : 'Not a real part', [
+      el('p', {}, to ? p.family + ' becomes ' + to.family + ' (' + to.name + ').' : p.family + ' comes off the parts list.'),
+      el('p', { class: 'muted' }, held.length
+        ? (to ? 'Stock moves to ' + to.name + ' at: ' : 'Stock is taken off at: ') + held.join(', ') + '.'
+        : 'No stock is recorded under this code.'),
+      el('p', { class: 'muted' }, 'Parts on their way under this code ' + (to ? 'become ' + to.name + '.' : 'are cancelled.')),
+      err, el('div', { class: 'buttons' }, go, el('button', { onclick: () => openRejectPart(p) }, 'Back'))]);
   }
 
   // --- Surplus: parts that can be collected from sites ---
