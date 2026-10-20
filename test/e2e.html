@@ -795,22 +795,42 @@
     const demo = rows('Sites')[1];
     appendObjects_('Printers', [{ SiteID: demo.SiteID, Model: 'SC180', Serial: '2' }, { SiteID: demo.SiteID, Model: 'EC1100', Serial: '3' }]);   // two SC180s and an EC1100
     const kitEngSession = call({ action: 'login', site: site.Token, pin: '1111' }).session;
+    // Known stock first: Demo Graphics holds its kit of 3 Suction Filters (one per machine); Sample Print Co holds
+    // 3 Feed Rolls, one more than its kit of 2 (as at Leeds on 19 Oct)
+    // (set directly, not by a count, so the later assumed-kit tests still see Demo Graphics as never counted)
+    const setStock = (id, fam, qty) => appendObjects_('Movements', [{ MovementID: Utilities.getUuid(), Timestamp: new Date(), SiteID: id, Family: fam, ExactCode: fam, Qty: qty - stockOf(id, fam), Type: 'COUNT', By: 'Test', Role: 'engineer' }]);
+    setStock(demo.SiteID, 'P053K0668X', 3);
+    setStock(site.SiteID, 'P059K6158X', 3);
+    await sleep(5);
     const kitStart = new Date(Date.now() - 1);
     call({ action: 'submit', site: demo.Token, batchId: 'k1', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K0668X', qty: 1 }, { code: 'P004E1900X', qty: 1 }] });
-    call({ action: 'submit', site: site.Token, session: kitEngSession, batchId: 'k2', type: 'USED', jobNo: '12345', items: [{ code: 'P059K6158X', qty: 1 }] });
-    call({ action: 'submit', site: site.Token, batchId: 'k3', type: 'BOOK_IN', items: [{ code: 'P059K6158X', qty: 2 }] });
+    call({ action: 'submit', site: demo.Token, session: kitEngSession, batchId: 'k1b', type: 'USED', jobNo: '12340', items: [{ code: 'P053K0668X', qty: 1, source: 'Ordered for job' }] });
+    call({ action: 'submit', site: site.Token, session: kitEngSession, batchId: 'k2', type: 'USED', jobNo: '12345', items: [{ code: 'P059K6158X', qty: 1, source: 'Uptime Kit' }] });
+    call({ action: 'submit', site: site.Token, batchId: 'k3', type: 'BOOK_IN', items: [{ code: 'P004E1900X', qty: 2 }] });
     call({ action: 'submit', van: true, session: kitEngSession, batchId: 'k4', type: 'USED', jobNo: '12346', items: [{ code: 'P053K0668X', qty: 1 }] });
     const usage = kitUsage_(kitStart, new Date(Date.now() + 1000));
-    const qtyAt = (name, fam) => ((usage.find(u => u.site.Name === name) || { parts: [] }).parts.find(p => p.family === fam) || {}).qty;
-    check('kit use: customer-fitted and engineer-used kit parts at kit sites', usage.length === 2 && qtyAt('Demo Graphics Ltd', 'P053K0668X') === 1 && qtyAt('Sample Print Co', 'P059K6158X') === 1, JSON.stringify(usage.map(u => [u.site.Name, u.parts])));
-    check('kit use leaves out non-kit parts, deliveries and van use', !qtyAt('Demo Graphics Ltd', 'P004E1900X') && usage.every(u => u.parts.length === 1));
+    const at = name => usage.find(u => u.site.Name === name) || { parts: [], enough: [] };
+    const qtyAt = (name, fam) => (at(name).parts.find(p => p.family === fam) || {}).qty;
+    check('kit use: a part used from the kit is reordered when the site drops below its kit', usage.length === 2 && qtyAt('Demo Graphics Ltd', 'P053K0668X') === 1 &&
+      at('Demo Graphics Ltd').parts[0].used === 1 && at('Demo Graphics Ltd').parts[0].onSite === 1 && at('Demo Graphics Ltd').parts[0].kit === 3, JSON.stringify(usage.map(u => [u.site.Name, u.parts, u.enough])));
+    check('a part ordered for the job is not reordered for the kit (only the customer-fitted one is)', at('Demo Graphics Ltd').parts.length === 1 && at('Demo Graphics Ltd').parts[0].qty === 1);
+    const lsd = at('Sample Print Co').enough[0] || {};
+    check('a site that still holds its kit after a use orders nothing (it had one extra)', !at('Sample Print Co').parts.length && lsd.family === 'P059K6158X' && lsd.used === 1 && lsd.onSite === 2 && lsd.kit === 2, JSON.stringify(at('Sample Print Co')));
+    check('kit use leaves out non-kit parts, deliveries and van use', !qtyAt('Demo Graphics Ltd', 'P004E1900X') && !at('Demo Graphics Ltd').enough.length && at('Sample Print Co').enough.length === 1);
     await sleep(5);
-    check('daily report sent for 2 sites', sendDailyKitReport() === 2 && mail.length === 1 && mail[0].to === 'admin@example.com' && /\(2 sites\)/.test(mail[0].subject), mail[0] && mail[0].subject);
+    check('daily report sent for the 1 site with something to order', sendDailyKitReport() === 1 && mail.length === 1 && mail[0].to === 'admin@example.com' && /\(1 site\)/.test(mail[0].subject), mail[0] && mail[0].subject);
     const body = mail[0].htmlBody;
     const links = [...body.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
     const demoLink = links.find(l => l.includes('Demo%20Graphics')) || '';
     const q = new URLSearchParams(demoLink.split('?')[1] || '');
-    check('email lists each site with its parts', /Demo Graphics Ltd/.test(body) && /Sample Print Co/.test(body) && /Suction Filter/.test(body) && !/P004E1900X/.test(body) && links.length === 2);
+    check('email lists the site to reorder with used, on site, kit and order', /Demo Graphics Ltd/.test(body) && /Suction Filter/.test(body) && /<th[^>]*>On site<\/th>/.test(body) && /<th[^>]*>Order<\/th>/.test(body) && !/P004E1900X/.test(body) && links.length === 1);
+    check('email lists the kit parts used where no order was needed, without a button', /no order needed/.test(body) && /Sample Print Co: Tray 1\/2 Feed Roll \(used 1, 2 on site, kit 2\)/.test(body), body);
+    // Used again tomorrow from the same short kit: only the new use is ordered, not the earlier shortfall again
+    await sleep(5);
+    mail.length = 0;
+    call({ action: 'submit', site: demo.Token, batchId: 'k5', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K0668X', qty: 1 }] });
+    check('a site still short from yesterday only reorders what was used since', sendDailyKitReport() === 1 && kitUsage_(kitStart, new Date(Date.now() + 1000)).find(u => u.site.Name === 'Demo Graphics Ltd').parts[0].onSite === 0 &&
+      new URLSearchParams(([...mail[0].htmlBody.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'))[0] || '').split('?')[1] || '').get('1 Qty') === '1', mail[0] && mail[0].htmlBody);
     check('order button goes through the app to the van form', demoLink.startsWith('https://parts-tracker.github.io/order.html?') && q.get('f') === '397ec25e0b1c44e3a4b4dcc952edba69' && q.get('days') === '7', demoLink);
     check('order button fills the form for delivery to the customer',
       q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Engineer Name Attending') === 'Demo Graphics Ltd' && q.get('Part Requested By') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' &&

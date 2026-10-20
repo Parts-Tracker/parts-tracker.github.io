@@ -1145,8 +1145,11 @@ const SETTINGS_DEFAULTS = [
   ['ArchiveSheet', '', 'The archive spreadsheet. Filled in by archiveMovements the first time it runs.']
 ];
 
-// Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site
+// Kit parts taken out of a customer's Up Time Kit: fitted by the customer or used by an engineer at the site,
+// unless the engineer said it came from somewhere else (ordered for the job, or from their van)
 const KIT_USE_TYPES = ['CUSTOMER_FITTED', 'USED'];
+const NOT_FROM_KIT = ['Ordered for job', 'Van Kit'];
+const kitTake_ = m => KIT_USE_TYPES.indexOf(String(m.row.Type)) >= 0 && m.qty < 0 && NOT_FROM_KIT.indexOf(String(m.row.Source || '')) < 0;
 
 // The order form's part fields are not named consistently (keep in step with web/app.js)
 const FORM_PART_FIELDS = [
@@ -1182,35 +1185,45 @@ function reportEmail_(cfg) {
 }
 
 /**
- * Kit parts used at customer sites between two times, grouped by site. A site's kit is every Kits row
- * whose Model matches one of its printers. Van stock and parts outside the site's kit are left out.
+ * Kit parts used at customer sites between two times, and what to reorder, grouped by site. A site's kit is the
+ * Kits rows for its machines (one kit per machine, No kit machines left out). A part is only reordered once the
+ * site holds fewer than its kit, and only up to the kit: order = what the site is short now, but no more than was
+ * used in the period (so a shortfall is not ordered again every evening). parts: lines to order; enough: kit parts
+ * used where the site still holds its kit. Van stock, parts outside the kit, and uses marked as ordered for the job
+ * or from a van are left out.
  */
 function kitUsage_(from, to) {
   const sites = {};
   readTable_('Sites').forEach(s => { sites[String(s.SiteID)] = s; });
+  const printers = readTable_('Printers');
   const models = {};
-  readTable_('Printers').forEach(p => {
+  printers.forEach(p => {
     if (noKit_(p)) return;   // e.g. a training machine
     const list = models[String(p.SiteID)] = models[String(p.SiteID)] || [];
     const m = cleanModel_(p.Model);
     if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once
   });
-  const kits = kitsByModel_();
+  const want = kitWanted_(printers);
   const names = partNames_(readTable_('Parts'));
-  const bySite = {};
+  const used = {}, stock = {};
   movementColumns_().forEach(m => {
-    if (KIT_USE_TYPES.indexOf(String(m.row.Type)) < 0 || !sites[m.site] || m.qty >= 0) return;
+    if (!sites[m.site] || !want[m.site]) return;
     const t = m.row.Timestamp;
-    if (!(t instanceof Date) || t <= from || t > to) return;   // after the last report, up to now
-    const siteModels = models[m.site] || [];
-    if (!siteModels.some(mod => kits[mod] && m.family in kits[mod])) return;
-    const s = bySite[m.site] = bySite[m.site] || { site: sites[m.site], models: siteModels, parts: {} };
-    s.parts[m.family] = s.parts[m.family] || { family: m.family, name: names[m.family] || '', qty: 0 };
-    s.parts[m.family].qty += -m.qty;
+    if (t instanceof Date && t > to) return;   // stock as it was at the end of the period
+    const st = stock[m.site] = stock[m.site] || {};
+    st[m.family] = (st[m.family] || 0) + m.qty;
+    if (!(t instanceof Date) || t <= from || !want[m.site][m.family] || !kitTake_(m)) return;   // after the last report, up to now
+    const u = used[m.site] = used[m.site] || {};
+    u[m.family] = (u[m.family] || 0) - m.qty;
   });
-  return Object.keys(bySite).map(k => {
-    const s = bySite[k];
-    return { site: s.site, models: s.models, parts: Object.keys(s.parts).map(f => s.parts[f]).sort((a, b) => a.family.localeCompare(b.family)) };
+  return Object.keys(used).map(id => {
+    const parts = [], enough = [];
+    Object.keys(used[id]).sort().forEach(f => {
+      const onSite = stock[id][f] || 0, kit = want[id][f];
+      const line = { family: f, name: names[f] || '', used: used[id][f], onSite: onSite, kit: kit, qty: Math.min(used[id][f], Math.max(0, kit - onSite)) };
+      (line.qty > 0 ? parts : enough).push(line);
+    });
+    return { site: sites[id], models: models[id] || [], parts: parts, enough: enough };
   }).sort((a, b) => String(a.site.Name).localeCompare(String(b.site.Name)));
 }
 
@@ -1251,12 +1264,17 @@ function esc_(v) {
   return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** The email: one block per site with its used kit parts and an order button (more than 9 parts: one button per 9). */
+/**
+ * The email: one block per site with kit parts to reorder and an order button (more than 9 parts: one button per 9),
+ * then the kit parts used where the site still holds its kit, so nothing was needed.
+ */
 function kitReportHtml_(usage, cfg, title) {
+  const cell = 'padding:6px 14px';
+  const enoughText = l => esc_(l.name || l.family) + ' (used ' + l.used + ', ' + l.onSite + ' on site, kit ' + l.kit + ')';
   let html = '<div style="font-family:Arial,sans-serif;color:#333;max-width:680px">' +
     '<h2 style="color:#01916D;margin:0 0 4px">Up Time Kit replenishment</h2>' +
-    '<p style="margin:0 0 16px;color:#666">' + esc_(title) + '</p>';
-  usage.forEach(u => {
+    '<p style="margin:0 0 16px;color:#666">' + esc_(title) + '. Parts are reordered only when a site holds less than its kit, up to the kit.</p>';
+  usage.filter(u => u.parts.length).forEach(u => {
     const s = u.site;
     html += '<div style="border:2px solid #01916D;border-radius:10px;margin:0 0 16px;overflow:hidden">' +
       '<div style="background:#E6F4F0;padding:10px 14px">' +
@@ -1264,13 +1282,16 @@ function kitReportHtml_(usage, cfg, title) {
       '<div style="font-size:13px;color:#555">' + esc_([s.Address, s.Postcode].filter(Boolean).join(', ')) +
       (u.models.length ? ' &middot; ' + esc_(u.models.join(', ')) : '') + '</div></div>' +
       '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
-      '<tr style="text-align:left;color:#666"><th style="padding:6px 14px">Part</th><th style="padding:6px 14px">Part number</th><th style="padding:6px 14px">Used</th></tr>';
+      '<tr style="text-align:left;color:#666"><th style="' + cell + '">Part</th><th style="' + cell + '">Part number</th><th style="' + cell + '">Used</th>' +
+      '<th style="' + cell + '">On site</th><th style="' + cell + '">Kit</th><th style="' + cell + '">Order</th></tr>';
     u.parts.forEach(l => {
-      html += '<tr style="border-top:1px solid #eee"><td style="padding:6px 14px">' + esc_(l.name || 'Unknown part') + '</td>' +
-        '<td style="padding:6px 14px;font-family:monospace">' + esc_(l.family) + '</td>' +
-        '<td style="padding:6px 14px;font-weight:bold;color:#E0356C">' + l.qty + '</td></tr>';
+      html += '<tr style="border-top:1px solid #eee"><td style="' + cell + '">' + esc_(l.name || 'Unknown part') + '</td>' +
+        '<td style="' + cell + ';font-family:monospace">' + esc_(l.family) + '</td>' +
+        '<td style="' + cell + '">' + l.used + '</td><td style="' + cell + '">' + l.onSite + '</td><td style="' + cell + '">' + l.kit + '</td>' +
+        '<td style="' + cell + ';font-weight:bold;color:#E0356C">' + l.qty + '</td></tr>';
     });
-    html += '</table><div style="padding:10px 14px">';
+    html += '</table>' + (u.enough.length ? '<p style="margin:0;padding:0 14px;font-size:13px;color:#666">No order needed: ' + u.enough.map(enoughText).join(', ') + '</p>' : '') +
+      '<div style="padding:10px 14px">';
     for (let i = 0; i < u.parts.length; i += FORM_PART_FIELDS.length) {
       const chunk = u.parts.slice(i, i + FORM_PART_FIELDS.length);
       const label = u.parts.length > FORM_PART_FIELDS.length ? 'Order parts ' + (i + 1) + '-' + (i + chunk.length) + ' &rarr;' : 'Order replacements &rarr;';
@@ -1278,12 +1299,17 @@ function kitReportHtml_(usage, cfg, title) {
     }
     html += '</div></div>';
   });
+  const enoughOnly = usage.filter(u => !u.parts.length);
+  if (enoughOnly.length) {
+    html += '<p style="margin:0 0 6px;font-weight:bold">Kit parts used, no order needed (the site still holds its kit)</p><ul style="margin:0 0 16px;padding-left:18px;font-size:13px;color:#555">' +
+      enoughOnly.map(u => '<li>' + esc_(u.site.Name) + ': ' + u.enough.map(enoughText).join(', ') + '</li>').join('') + '</ul>';
+  }
   return html + '<p style="font-size:12px;color:#888">Sent by Parts Tracker. Check the form before pressing Submit in Smartsheet.</p></div>';
 }
 
 /**
  * Sends the kit report for everything used since the last report (first run: the last 24 hours).
- * Run daily by the trigger that installDailyReport sets up. Sends nothing on a day with no kit use.
+ * Run daily by the trigger that installDailyReport sets up. Sends nothing on a day with nothing to reorder.
  */
 function sendDailyKitReport() {
   try { settleOnItsWay_(); } catch (e) { console.error('On its way: ' + (e && e.message)); }   // parts posted a week ago
@@ -1303,12 +1329,13 @@ function sendKitReport_(from, to, title, always, subjectPrefix) {
   const email = reportEmail_(cfg);
   if (!email) throw new Error('No email address for the kit report. Fill in ReportEmail on the Settings tab.');
   const usage = kitUsage_(from, to);
-  if (!usage.length && !always) return 0;
+  const toOrder = usage.filter(u => u.parts.length).length;   // sites with something to reorder
+  if (!toOrder && !always) return 0;
   const tz = Session.getScriptTimeZone();
   const subject = (subjectPrefix || '') + 'Up Time Kit replenishment - ' + Utilities.formatDate(to, tz, 'EEE d MMM yyyy') +
-    (usage.length ? ' (' + usage.length + (usage.length === 1 ? ' site)' : ' sites)') : '');
+    (toOrder ? ' (' + toOrder + (toOrder === 1 ? ' site)' : ' sites)') : '');
   const html = usage.length ? kitReportHtml_(usage, cfg, title)
     : '<p style="font-family:Arial,sans-serif">No Up Time Kit parts were used. (' + esc_(title) + ')</p>';
   MailApp.sendEmail({ to: email, subject: subject, htmlBody: html, name: 'Parts Tracker' });
-  return usage.length;
+  return toOrder;
 }
