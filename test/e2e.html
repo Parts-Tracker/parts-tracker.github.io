@@ -86,7 +86,11 @@
     check('known part scan buzzes once', buzz[0] === '90', buzz);
     A.handleCode('P059K6158X', 'barcode');
     A.handleCode('053K 91890', 'barcode');
-    check('known parts added by name, repeats counted', A.state.basket.length === 2 && A.state.basket[0].qty === 2 && A.state.basket[0].name === 'Tray 1/2 Feed Roll', A.state.basket);
+    check('known parts added by name, repeats counted', A.state.basket.length === 2 && A.state.basket[1].qty === 2 && A.state.basket[1].name === 'Tray 1/2 Feed Roll', A.state.basket);
+    check('the newest scan is at the top of the list', A.state.basket[0].name === 'Filter' && /^Filter/.test($('basketList').firstChild.textContent), $('basketList').textContent);
+    A.handleCode('P059K6158X', 'barcode');
+    check('scanning a part again moves it to the top', A.state.basket[0].name === 'Tray 1/2 Feed Roll' && A.state.basket[0].qty === 3 && /^Tray 1\/2 Feed Roll/.test($('basketList').firstChild.textContent), $('basketList').textContent);
+    $('basketList').firstChild.querySelector('[aria-label="One less"]').click();
     A.handleCode('FFB053V91890', 'barcode');
     const nearPick = await waitFor(() => $('sheetTitle').textContent === 'Not in the parts list') && $('sheetBody').querySelector('.near-parts .pick');
     check('a code one character off a known part offers it', nearPick && /Did you mean/.test($('sheetBody').textContent) && /Filter/.test(nearPick.textContent) && /P053K9189X/.test(nearPick.textContent), $('sheetBody').textContent);

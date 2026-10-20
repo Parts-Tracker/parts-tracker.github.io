@@ -525,10 +525,12 @@
     setTimeout(() => name.focus(), 50);
   }
 
+  /** The part just scanned goes to the top of the list (a repeat moves up too), so its + button is at hand. */
   function addToBasket(n, name, isNew) {
     const existing = state.basket.find(b => b.family === n.family);
     if (existing) existing.qty++;
-    else state.basket.push({ family: n.family, exact: n.exact, name, qty: 1, isNew, odd: !!n.warning });
+    state.basket = [existing || { family: n.family, exact: n.exact, name, qty: 1, isNew, odd: !!n.warning }]
+      .concat(state.basket.filter(b => b !== existing));
     renderBasket();
   }
   function changeQty(family, delta) {
