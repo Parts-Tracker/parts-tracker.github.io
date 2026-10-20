@@ -1188,9 +1188,10 @@ function reportEmail_(cfg) {
  * Kit parts used at customer sites between two times, and what to reorder, grouped by site. A site's kit is the
  * Kits rows for its machines (one kit per machine, No kit machines left out). A part is only reordered once the
  * site holds fewer than its kit, and only up to the kit: order = what the site is short now, but no more than was
- * used in the period (so a shortfall is not ordered again every evening). parts: lines to order; enough: kit parts
- * used where the site still holds its kit. Van stock, parts outside the kit, and uses marked as ordered for the job
- * or from a van are left out.
+ * used in the period (so a shortfall is not ordered again every evening). An open site counted in the period
+ * (counted: true) orders its whole shortfall instead: every kit part it holds less of than its kit, up to the kit,
+ * so kit found missing is replaced. parts: lines to order; enough: kit parts used where the site still holds its
+ * kit. Van stock, parts outside the kit, and uses marked as ordered for the job or from a van are left out.
  */
 function kitUsage_(from, to) {
   const sites = {};
@@ -1205,26 +1206,34 @@ function kitUsage_(from, to) {
   });
   const want = kitWanted_(printers);
   const names = partNames_(readTable_('Parts'));
-  const used = {}, stock = {};
+  const inPeriod = t => t instanceof Date && t > from && t <= to;   // after the last report, up to now
+  const used = {}, stock = {}, counted = {};
+  Object.keys(sites).forEach(id => { if (inPeriod(sites[id].LastCount)) counted[id] = true; });
   movementColumns_().forEach(m => {
     if (!sites[m.site] || !want[m.site]) return;
     const t = m.row.Timestamp;
     if (t instanceof Date && t > to) return;   // stock as it was at the end of the period
     const st = stock[m.site] = stock[m.site] || {};
     st[m.family] = (st[m.family] || 0) + m.qty;
-    if (!(t instanceof Date) || t <= from || !want[m.site][m.family] || !kitTake_(m)) return;   // after the last report, up to now
+    if (!inPeriod(t)) return;
+    if (String(m.row.Type) === 'COUNT') counted[m.site] = true;
+    if (!want[m.site][m.family] || !kitTake_(m)) return;
     const u = used[m.site] = used[m.site] || {};
     u[m.family] = (u[m.family] || 0) - m.qty;
   });
-  return Object.keys(used).map(id => {
+  const ids = Object.keys(want).filter(id => sites[id] && (used[id] || (counted[id] && isTrue_(sites[id].Active))));
+  return ids.map(id => {
+    const u = used[id] || {}, st = stock[id] || {}, isCount = !!counted[id] && isTrue_(sites[id].Active);
     const parts = [], enough = [];
-    Object.keys(used[id]).sort().forEach(f => {
-      const onSite = stock[id][f] || 0, kit = want[id][f];
-      const line = { family: f, name: names[f] || '', used: used[id][f], onSite: onSite, kit: kit, qty: Math.min(used[id][f], Math.max(0, kit - onSite)) };
-      (line.qty > 0 ? parts : enough).push(line);
+    Object.keys(isCount ? want[id] : u).sort().forEach(f => {
+      const onSite = st[f] || 0, kit = want[id][f], short = Math.max(0, kit - Math.max(0, onSite));
+      const line = { family: f, name: names[f] || '', used: u[f] || 0, onSite: onSite, kit: kit, qty: isCount ? short : Math.min(u[f], short) };
+      if (line.qty > 0) parts.push(line);
+      else if (line.used) enough.push(line);
     });
-    return { site: sites[id], models: models[id] || [], parts: parts, enough: enough };
-  }).sort((a, b) => String(a.site.Name).localeCompare(String(b.site.Name)));
+    return { site: sites[id], models: models[id] || [], counted: isCount, parts: parts, enough: enough };
+  }).filter(x => x.parts.length || x.enough.length)
+    .sort((a, b) => String(a.site.Name).localeCompare(String(b.site.Name)));
 }
 
 /**
@@ -1274,7 +1283,12 @@ function kitReportHtml_(usage, cfg, title) {
   let html = '<div style="font-family:Arial,sans-serif;color:#333;max-width:680px">' +
     '<h2 style="color:#01916D;margin:0 0 4px">Up Time Kit replenishment</h2>' +
     '<p style="margin:0 0 16px;color:#666">' + esc_(title) + '. Parts are reordered only when a site holds less than its kit, up to the kit.</p>';
-  usage.filter(u => u.parts.length).forEach(u => {
+  const heading = text => '<p style="margin:0 0 8px;font-weight:bold;font-size:15px">' + text + '</p>';
+  const used = usage.filter(u => u.parts.length && !u.counted), short = usage.filter(u => u.parts.length && u.counted);
+  if (used.length && short.length) html += heading('Kit parts used');
+  used.concat(short).forEach((u, i) => {
+    if (i === used.length && short.length) html += heading('Found short by a stock count') +
+      '<p style="margin:-4px 0 8px;font-size:13px;color:#555">These sites were counted: everything they hold less of than their kit is ordered, including parts the count found missing.</p>';
     const s = u.site;
     html += '<div style="border:2px solid #01916D;border-radius:10px;margin:0 0 16px;overflow:hidden">' +
       '<div style="background:#E6F4F0;padding:10px 14px">' +
@@ -1299,7 +1313,7 @@ function kitReportHtml_(usage, cfg, title) {
     }
     html += '</div></div>';
   });
-  const enoughOnly = usage.filter(u => !u.parts.length);
+  const enoughOnly = usage.filter(u => !u.parts.length && u.enough.length);
   if (enoughOnly.length) {
     html += '<p style="margin:0 0 6px;font-weight:bold">Kit parts used, no order needed (the site still holds its kit)</p><ul style="margin:0 0 16px;padding-left:18px;font-size:13px;color:#555">' +
       enoughOnly.map(u => '<li>' + esc_(u.site.Name) + ': ' + u.enough.map(enoughText).join(', ') + '</li>').join('') + '</ul>';

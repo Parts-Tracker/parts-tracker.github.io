@@ -797,8 +797,8 @@
     const kitEngSession = call({ action: 'login', site: site.Token, pin: '1111' }).session;
     // Known stock first: Demo Graphics holds its kit of 3 Suction Filters (one per machine); Sample Print Co holds
     // 3 Feed Rolls, one more than its kit of 2 (as at Leeds on 19 Oct)
-    // (set directly, not by a count, so the later assumed-kit tests still see Demo Graphics as never counted)
-    const setStock = (id, fam, qty) => appendObjects_('Movements', [{ MovementID: Utilities.getUuid(), Timestamp: new Date(), SiteID: id, Family: fam, ExactCode: fam, Qty: qty - stockOf(id, fam), Type: 'COUNT', By: 'Test', Role: 'engineer' }]);
+    // (set directly, not by a count: a count would make the email order the whole shortfall, and the later assumed-kit tests need Demo Graphics never counted)
+    const setStock = (id, fam, qty) => appendObjects_('Movements', [{ MovementID: Utilities.getUuid(), Timestamp: new Date(), SiteID: id, Family: fam, ExactCode: fam, Qty: qty - stockOf(id, fam), Type: 'KIT_ADJUST', By: 'Test', Role: 'engineer' }]);
     setStock(demo.SiteID, 'P053K0668X', 3);
     setStock(site.SiteID, 'P059K6158X', 3);
     await sleep(5);
@@ -831,6 +831,26 @@
     call({ action: 'submit', site: demo.Token, batchId: 'k5', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K0668X', qty: 1 }] });
     check('a site still short from yesterday only reorders what was used since', sendDailyKitReport() === 1 && kitUsage_(kitStart, new Date(Date.now() + 1000)).find(u => u.site.Name === 'Demo Graphics Ltd').parts[0].onSite === 0 &&
       new URLSearchParams(([...mail[0].htmlBody.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'))[0] || '').split('?')[1] || '').get('1 Qty') === '1', mail[0] && mail[0].htmlBody);
+    // A stock count that finds kit missing: that evening, everything the site is short of its kit is ordered
+    await sleep(5);
+    mail.length = 0;
+    const countFrom = new Date(Date.now() - 1);
+    call({ action: 'submit', site: site.Token, session: kitEngSession, batchId: 'k6', type: 'COUNT', items: [] , zero: ['P059K6158X'] });
+    check('the count found the Feed Rolls missing', stockOf(site.SiteID, 'P059K6158X') === 0);
+    const shortUse = kitUsage_(countFrom, new Date(Date.now() + 1000)).find(u => u.site.Name === 'Sample Print Co');
+    check('a counted kit site orders its whole shortfall, though nothing was used', shortUse && shortUse.counted && shortUse.parts.length === 1 && shortUse.parts[0].family === 'P059K6158X' &&
+      shortUse.parts[0].qty === 2 && shortUse.parts[0].used === 0 && shortUse.parts[0].onSite === 0 && shortUse.parts[0].kit === 2, JSON.stringify(shortUse));
+    check('kit parts the count found in full are not ordered', shortUse.parts.every(l => l.onSite < l.kit));
+    const sampleRow = rows('Sites').find(x => x.SiteID === site.SiteID);
+    const sitesSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Sites');
+    sitesSh.getRange(sampleRow._row, col_('Sites', 'Active')).setValue(false);
+    check('a closed site that was counted orders nothing', !kitUsage_(countFrom, new Date(Date.now() + 1000)).some(u => u.site.Name === 'Sample Print Co'));
+    sitesSh.getRange(sampleRow._row, col_('Sites', 'Active')).setValue(true);
+    check('the email has a Found short by a stock count section with an order button', sendDailyKitReport() === 1 && /Found short by a stock count/.test(mail[0].htmlBody) && /Sample Print Co/.test(mail[0].htmlBody) &&
+      new URLSearchParams(([...mail[0].htmlBody.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'))[0] || '').split('?')[1] || '').get('1 Qty') === '2', mail[0] && mail[0].htmlBody);
+    mail.length = 0;
+    check('the shortfall is not ordered again the next evening', sendDailyKitReport() === 0 && mail.length === 0);
+    setStock(site.SiteID, 'P059K6158X', 2);   // the replacements arrived
     check('order button goes through the app to the van form', demoLink.startsWith('https://parts-tracker.github.io/order.html?') && q.get('f') === '397ec25e0b1c44e3a4b4dcc952edba69' && q.get('days') === '7', demoLink);
     check('order button fills the form for delivery to the customer',
       q.get('Customer Name') === 'Demo Graphics Ltd' && q.get('Engineer Name Attending') === 'Demo Graphics Ltd' && q.get('Part Requested By') === 'Demo Graphics Ltd' && q.get('Post Code') === 'BD1 1AA' &&
