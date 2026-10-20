@@ -134,12 +134,14 @@
     const shownTiles = () => [...$('siteActions').children].filter(b => !b.hidden).map(b => b.dataset.mode || b.id);
     check('customers: Book in and We fitted side by side, View stock full width underneath',
       JSON.stringify(shownTiles()) === '["BOOK_IN","CUSTOMER_FITTED","viewStockBtn"]' && $('viewStockBtn').offsetWidth === $('siteActions').offsetWidth && tile('BOOK_IN').offsetWidth < $('siteActions').offsetWidth * 0.6, shownTiles());
+    check('customers are not sent the site kit', A.state.data.kit === undefined);
     $('userChip').click();
     check('engineer sign in asks for a PIN', await waitFor(() => $('sheetTitle').textContent.includes('sign in')));
     const key = k => Array.from($('sheetBody').querySelectorAll('.keypad button')).find(b => b.textContent === k).click();
     ['1', '1', '1', '1', 'OK'].forEach(key);
     check('engineer tiles appear after sign in', await waitFor(() => !tile('USED').hidden && !tile('COUNT').hidden));
     check('My van switch appears straight after sign in, no reload', !$('whereSwitch').hidden);
+    check('signing in at a site fetches its Up Time Kit', await waitFor(() => A.state.data.kit !== undefined), A.state.data);
     check("engineers: Book in | Take to my van, then Used | Stock count, then the customer's We fitted | View stock at the bottom",
       JSON.stringify(shownTiles()) === '["BOOK_IN","TO_VAN","USED","COUNT","CUSTOMER_FITTED","viewStockBtn"]' && !$('viewStockBtn').classList.contains('full') &&
       tile('BOOK_IN').offsetTop === tile('TO_VAN').offsetTop && tile('USED').offsetTop < $('viewStockBtn').offsetTop, shownTiles());
@@ -167,9 +169,13 @@
     await waitFor(() => visible('view-scan'));
     A.handleCode('P053K9189X', 'barcode'); A.handleCode('P053K9189X', 'barcode');
     $('scanNext').click(); await waitFor(() => visible('view-review'));
+    const srcPick = $('reviewList').querySelector('.source-pick');
+    check('used on a job asks where each part came from', srcPick && [...srcPick.options].map(o => o.value).join() === 'Uptime Kit,Van Kit,Ordered for job', srcPick && srcPick.outerHTML);
+    srcPick.value = 'Ordered for job'; srcPick.dispatchEvent(new Event('change'));
     $('jobNo').value = 'J1002'; $('reviewSend').click();
     check('below-zero use is recorded and warned', await waitFor(() => visible('view-done') && !$('doneWarn').hidden), $('doneWarn').textContent);
     check('below-zero row has a note', rows('Movements').some(m => /below zero/.test(m.Note)));
+    check('the chosen source is saved on the movement', rows('Movements').filter(m => m.JobNo === 'J1002').every(m => m.Source === 'Ordered for job'), rows('Movements').filter(m => m.JobNo === 'J1002'));
 
     // ---- Stock count sets quantities and zeroes what was not found ----
     $('doneHome').click();
@@ -281,6 +287,7 @@
     check('used on a job from the van', await waitFor(() => visible('view-done')) && await saved() && stockOf('VAN-E01', 'P059K6158X') === 2);
     const usedRow = rows('Movements').find(m => m.SiteID === 'VAN-E01' && m.Type === 'USED');
     check('van use has the job number', usedRow && usedRow.JobNo === 'J2001' && usedRow.Qty === -1, usedRow);
+    check('a van kit part used from the van is guessed as Van Kit', usedRow.Source === 'Van Kit', usedRow);
 
     const vanStock = call({ action: 'van', session: A.state.session });
     check('van data comes back for the engineer', vanStock.ok && vanStock.van.id === 'VAN-E01' && vanStock.kit.length === 3, vanStock);
@@ -363,9 +370,16 @@
     const failTick = $('reviewList').querySelector('.fail-tick input');
     check('used on a job offers a failed-on-fit tick', failTick && /One of these failed on fit/.test($('reviewList').textContent) && /Job or ticket number/.test($('jobLabel').textContent));
     failTick.click();
+    check('a kit part at a kit site is guessed as Uptime Kit', $('reviewList').querySelector('.source-pick').value === 'Uptime Kit');
     $('jobNo').value = 'J3001';
     $('reviewSend').click();
     check('use with a failed part saved', await waitFor(() => visible('view-done')) && await saved());
+    let copied = null;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { copied = t; } } });
+    check('done screen offers Copy for SAP after a use', !$('doneCopy').hidden);
+    $('doneCopy').click();
+    check('Copy for SAP copies the parts in the SAP style', await waitFor(() => copied === '2X - P059K6158X - Tray 1/2 Feed Roll - Uptime Kit'), copied);
+    check('the source is saved on the failed line too', rows('Movements').filter(m => m.JobNo === 'J3001').every(m => m.Source === 'Uptime Kit'));
     const j3 = rows('Movements').filter(m => m.JobNo === 'J3001');
     check('the failed part has its own line marked for warranty, the other is a normal use', j3.length === 2 && j3.every(m => m.Type === 'USED' && m.Qty === -1) &&
       j3.filter(m => /^Failed on fit \(warranty\)/.test(m.Note)).length === 1, j3);
@@ -373,6 +387,27 @@
     check('both count as used in the kit email, so the kit is reordered', failUse && failUse.parts.length === 1 && failUse.parts[0].qty === 2, failUse);
     $('doneHome').click();
     check('site history marks the failed part', await waitFor(() => /Used · failed on fit · Test Engineer · job J3001/.test($('recentList').textContent)), $('recentList').textContent);
+
+    // ---- My jobs: parts used by this engineer, by job number, to copy into SAP when closing the call ----
+    const j1 = rows('Movements').find(m => m.JobNo === 'J1001');
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Movements').getRange(j1._row, col_('Movements', 'Source')).setValue('');   // recorded before the Source column
+    const jobs = call({ action: 'myJobs', session: A.state.session });
+    const job = n => jobs.jobs.find(j => j.jobNo === n);
+    check('my jobs lists each job once, newest first', jobs.ok && jobs.jobs[0].jobNo === 'J3001' && ['J1001', 'J1002', 'J2001', 'J3001'].every(n => jobs.jobs.filter(j => j.jobNo === n).length === 1), jobs);
+    check('a job joins its lines and says where it was', job('J3001').lines.length === 1 && job('J3001').lines[0].qty === 2 && job('J3001').places.join() === 'Sample Print Co' && job('J2001').places.join() === 'Your van', jobs);
+    check('lines without a source get the same guess as the app', job('J1001').lines[0].source === ((kitWanted_(rows('Printers'))[site.SiteID] || {})['P059K6158X'] ? 'Uptime Kit' : 'Ordered for job'), job('J1001'));
+    check('my jobs needs a signed-in engineer', call({ action: 'myJobs' }).ok === false);
+    A.openJobs();
+    check('My jobs opens a list with Copy for SAP per job', await waitFor(() => $('sheetTitle').textContent === 'My jobs' && $('sheetBody').querySelectorAll('.job').length === jobs.jobs.length) &&
+      /Job J3001/.test($('sheetBody').querySelector('.job').textContent) && /2X - P059K6158X - Tray 1\/2 Feed Roll - Uptime Kit/.test($('sheetBody').querySelector('.job').textContent), $('sheetBody').textContent);
+    copied = null;
+    [...$('sheetBody').querySelectorAll('.job')].find(j => /Job J1002/.test(j.textContent)).querySelector('button').click();
+    check('copying a job gives its parts', await waitFor(() => copied === '2X - P053K9189X - Filter - Ordered for job'), copied);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('blocked'); } } });
+    $('sheetBody').querySelector('.job button').click();
+    check('if copying is blocked, the text is shown to copy by hand', await waitFor(() => $('sheetTitle').textContent === 'Copy for SAP' && /2X - P059K6158X/.test($('sheetBody').querySelector('textarea').value)));
+    document.querySelector('#sheet .buttons button').click();
+    check('the My jobs button is on My van', $('vanJobs') && $('vanJobs').closest('#view-van'));
 
     // Taken to the van with no signal: the site and the van change on the phone at once, sent later
     apiDown = true;

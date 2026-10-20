@@ -29,7 +29,7 @@ const SHEETS = {
   Printers: ['SiteID', 'Model', 'Serial', 'No kit'],   // No kit TRUE: a machine with no Up Time Kit (e.g. a training machine)
   Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
-  Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID'],
+  Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID', 'Source'],
   Kits: ['Model', 'Part Number', 'Qty', 'Name'],   // Name is a lookup from the Parts tab, filled in by setup
   VanKit: ['Part Number', 'Min', 'Max', 'Name'],   // one van kit for every engineer
   Settings: ['Setting', 'Value', 'Notes'],
@@ -53,6 +53,9 @@ const MOVEMENT_TYPES = {
   // Transfer: parts sent from the engineer's van to a site (req.toSite), on the OnItsWay tab until they arrive
   POSTED: { sign: -1, roles: ['engineer', 'admin'], heldOnly: true, vanOnly: true }
 };
+// Where a part used on a job came from, as SAP wants it when the call is closed (the Movements Source column)
+const SOURCES = ['Uptime Kit', 'Van Kit', 'Ordered for job'];
+const SAP_DAYS = 30;   // My jobs lists the last month's jobs
 // Note on a USED line for a part that failed on fit: still used (a kit site gets it reordered), kept for a warranty claim
 const FAILED_ON_FIT = 'Failed on fit (warranty)';
 
@@ -91,6 +94,7 @@ const ACTIONS = {
   submit: actionSubmit,
   admin: actionAdmin,
   van: actionVan,
+  myJobs: actionMyJobs,
   sites: actionSites,
   reviewPart: actionReviewPart,
   rejectPart: actionRejectPart,
@@ -217,7 +221,8 @@ function actionSubmit(req) {
         addExactCode_(byFamily[n.family], n.exact);
       }
       const failed = type === 'USED' ? Math.min(qty, Math.max(0, Math.floor(Number(it.failed) || 0))) : 0;
-      lines.push({ family: n.family, exact: n.exact, qty: qty, odd: !!n.warning, failed: failed });
+      const source = type === 'USED' && SOURCES.indexOf(String(it.source)) >= 0 ? String(it.source) : '';
+      lines.push({ family: n.family, exact: n.exact, qty: qty, odd: !!n.warning, failed: failed, source: source });
     });
     if (newParts.length) appendObjects_('Parts', newParts);
 
@@ -270,7 +275,7 @@ function actionSubmit(req) {
       });
     } else {
       lines.forEach(l => {
-        const qty = spec.sign * l.qty;
+        const qty = spec.sign * l.qty, first = rows.length;
         let rowNote = l.odd ? 'unusual code' : '';
         // A delivery booked in here may be a part someone posted: it has now arrived (no extra stock)
         if (type === 'BOOK_IN') arrived_(waiting, l.family, l.qty, 'Booked in');
@@ -294,6 +299,7 @@ function actionSubmit(req) {
           row(l.family, l.exact, -l.failed, withNote(FAILED_ON_FIT + (rowNote ? '; ' + rowNote : '')));
           if (l.qty > l.failed) row(l.family, l.exact, qty + l.failed, rowNote);
         } else row(l.family, l.exact, qty, rowNote);
+        if (l.source) rows.slice(first).forEach(r => { if (r.Type === 'USED') r.Source = l.source; });
       });
     }
     if (rows.length) appendObjects_('Movements', rows);
@@ -362,6 +368,46 @@ function actionVan(req) {
   };
   if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
   return out;
+}
+
+/**
+ * The signed-in engineer's parts used on jobs in the last SAP_DAYS days, one entry per job number, newest first,
+ * for closing calls in SAP. Lines recorded before the Source column get the app's guess: van stock is Van Kit,
+ * a kit part at a site is Uptime Kit, anything else Ordered for job.
+ */
+function actionMyJobs(req) {
+  const user = sessionUser_(req.session, false);
+  if (['engineer', 'admin'].indexOf(String(user.Role).toLowerCase()) < 0) throw err_('forbidden', 'Engineers only.');
+  const cutoff = Date.now() - SAP_DAYS * 86400000;
+  const van = vanId_(user);
+  const names = partNames_(readTable_('Parts'));
+  const siteNames = {};
+  readTable_('Sites').forEach(s => { siteNames[String(s.SiteID)] = s.Name; });
+  let kits = null;   // read only if an old line needs a guess
+  const guess = m => {
+    if (m.site === van) return 'Van Kit';
+    kits = kits || kitWanted_(readTable_('Printers'));
+    return (kits[m.site] || {})[m.family] ? 'Uptime Kit' : 'Ordered for job';
+  };
+  const jobs = {};
+  movementColumns_().forEach(m => {
+    const r = m.row, at = r.Timestamp;
+    if (String(r.Type) !== 'USED' || String(r.By) !== String(user.Name) || !(at instanceof Date) || at.getTime() < cutoff) return;
+    const jobNo = String(r.JobNo || '').trim();
+    const j = jobs[jobNo] = jobs[jobNo] || { jobNo: jobNo, at: at, places: [], lines: {} };
+    if (at > j.at) j.at = at;
+    const place = m.site === van ? 'Your van' : siteNames[m.site] || m.site;
+    if (j.places.indexOf(place) < 0) j.places.push(place);
+    const source = SOURCES.indexOf(String(r.Source)) >= 0 ? String(r.Source) : guess(m);
+    const l = j.lines[m.family + '|' + source] = j.lines[m.family + '|' + source] || { family: m.family, name: names[m.family] || '', qty: 0, source: source };
+    l.qty -= m.qty;
+  });
+  return {
+    days: SAP_DAYS,
+    jobs: Object.keys(jobs).map(k => jobs[k]).sort((a, b) => b.at - a.at).slice(0, 50).map(j => ({
+      jobNo: j.jobNo, at: iso_(j.at), places: j.places, lines: Object.keys(j.lines).map(k => j.lines[k]).filter(l => l.qty > 0)
+    }))
+  };
 }
 
 /**

@@ -377,6 +377,7 @@
         toast('Signed in as ' + r.user.name);
         state.queue.forEach(q => { if (q.error && /sign in/i.test(q.error)) q.error = ''; });
         saveQueue(); syncQueue();
+        if (state.site) loadSite();   // engineers also get the site's Up Time Kit (kit warnings, where a used part came from)
         if (then) then();
       } catch (e) {
         setChecking(false);
@@ -659,6 +660,11 @@
         const tick = el('input', { type: 'checkbox', checked: !!b.failed, onchange: () => { b.failed = tick.checked ? 1 : 0; } });
         li.classList.add('with-tick');
         li.append(el('label', { class: 'fail-tick' }, tick, (b.qty > 1 ? 'One of these failed on fit' : 'Failed on fit') + ' (keeping it for warranty)'));
+        // Where it came from, for closing the call in SAP: a guess the engineer can change
+        if (!b.source) b.source = guessSource(b.family);
+        const pick = el('select', { class: 'source-pick', 'aria-label': 'Where ' + b.name + ' came from', onchange: () => { b.source = pick.value; } },
+          SOURCES.map(x => el('option', { value: x, selected: x === b.source }, x)));
+        li.append(el('label', { class: 'source-line' }, 'From', pick));
       }
       list.append(li);
     });
@@ -678,6 +684,57 @@
     $('reviewError').hidden = true;
     $('reviewSend').disabled = false;
     show('view-review');
+  }
+
+  const SOURCES = ['Uptime Kit', 'Van Kit', 'Ordered for job'];
+  /** Van: Van Kit if it's on the van kit (or there is none yet). Site: Uptime Kit if it's in the site's kit. Otherwise Ordered for job. */
+  function guessSource(family) {
+    if (state.where === 'van') {
+      const kit = state.van && state.van.kit || [];
+      return !kit.length || kit.some(k => k.family === family) ? 'Van Kit' : 'Ordered for job';
+    }
+    return (state.data && state.data.kit || {})[family] ? 'Uptime Kit' : 'Ordered for job';
+  }
+  /** Parts used, one line each, in the style the call is closed with in SAP: "1X - P053K0668X - Suction Filter - Uptime Kit". */
+  function sapText(lines) {
+    return lines.map(l => l.qty + 'X - ' + l.family + ' - ' + (l.name || 'Unknown part') + ' - ' + l.source).join('\n');
+  }
+  /** Copies text to the clipboard; if the browser won't, shows it selected so it can be copied by hand. */
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Copied. Paste it into SAP.');
+    } catch (e) {
+      const box = el('textarea', { class: 'input sap-text', readonly: true, rows: Math.min(12, text.split('\n').length + 1) });
+      box.value = text;
+      openSheet('Copy for SAP', [el('p', { class: 'muted' }, 'Copying is blocked here: press and hold the text, Select all, then Copy.'), box,
+        el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]);
+      setTimeout(() => { box.focus(); box.select(); }, 50);
+    }
+  }
+
+  /** My jobs: the engineer's parts used on jobs in the last month, by job number, each with Copy for SAP. */
+  async function openJobs() {
+    const status = el('p', { class: 'muted' }, 'Loading your jobs…');
+    const list = el('div', { class: 'job-list' });
+    openSheet('My jobs', [status, list, el('div', { class: 'buttons' }, el('button', { onclick: closeSheet }, 'Close'))]);
+    let r;
+    try {
+      r = await api({ action: 'myJobs', session: state.session });
+      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code });
+    } catch (e) {
+      status.textContent = e.code === 'offline' ? 'No connection. My jobs needs signal.' : e.message;
+      return;
+    }
+    status.textContent = r.jobs.length ? 'Parts you used on jobs in the last ' + r.days + ' days, newest first.' : 'No parts used on a job in the last ' + r.days + ' days.';
+    r.jobs.forEach(j => {
+      const text = sapText(j.lines);
+      list.append(el('div', { class: 'card job' },
+        el('div', { class: 'item-name' }, j.jobNo ? 'Job ' + j.jobNo : 'No job number'),
+        el('div', { class: 'item-sub' }, j.places.concat(when(j.at)).join(' · ')),
+        el('pre', { class: 'order-text' }, text),
+        el('button', { class: 'btn primary', onclick: () => copyText(text) }, 'Copy for SAP')));
+    });
   }
 
   /**
@@ -731,13 +788,14 @@
       siteName: state.where === 'van' ? 'your van' : (state.data ? state.data.site.name : ''), type: mode, jobNo,
       note: $('note').value.trim(), device: deviceLabel(), createdAt: new Date().toISOString(),
       by: state.user ? state.user.name : 'Customer',
-      items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined, failed: mode === 'USED' && b.failed ? b.failed : undefined })),
+      items: state.basket.map(b => ({ code: b.exact || b.family, qty: b.qty, name: b.isNew ? b.name : undefined, failed: mode === 'USED' && b.failed ? b.failed : undefined, source: mode === 'USED' ? b.source : undefined })),
       zero, count: state.basket.reduce((s, b) => s + b.qty, 0)
     };
     if (mode === 'POSTED') { batch.toSite = state.postTo.token; batch.toSiteName = state.postTo.name; }
     // Saved on the phone first, shown as done straight away, then sent in the background
     // (the server takes a few seconds, and the phone may have no signal)
     if (batch.van && mode === 'BOOK_IN') clearOrdered(state.basket.map(b => b.family));
+    state.doneSap = mode === 'USED' ? sapText(state.basket) : '';
     state.queue.push(batch);
     saveQueue();
     applyLocally(batch);
@@ -798,6 +856,7 @@
       : batch.type === 'POSTED' ? parts + ' transferred to ' + batch.toSiteName + '. They show there as on their way until booked in.'
       : parts + ' recorded at ' + batch.siteName + '.';
     $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
+    $('doneCopy').hidden = batch.type !== 'USED' || !state.doneSap;
     $('doneStatus').textContent = 'Sending…';
     $('doneStatus').className = 'send-status';
     $('doneWarn').hidden = true;
@@ -1933,6 +1992,7 @@
     $('doNotPress').addEventListener('click', doNotPress);
     $('surplusCopy').addEventListener('click', copySurplus);
     $('vanFindPart').addEventListener('click', openFind);
+    $('vanJobs').addEventListener('click', openJobs);
     $('recountGo').addEventListener('click', () => startMode('COUNT'));
     $('changeSite').addEventListener('click', chooseSite);
     $('vanStockBtn').addEventListener('click', () => { $('stockFilter').value = ''; renderStock(); show('view-stock'); });
@@ -1960,6 +2020,7 @@
       reviewWarnings(sendType(), stock);   // "From my van" checks the van's stock instead
     }));
     $('doneHome').addEventListener('click', goHome);
+    $('doneCopy').addEventListener('click', () => copyText(state.doneSap));
     $('sheetBackdrop').addEventListener('click', closeSheet);
     $('printQr').addEventListener('click', () => window.print());
     $('adminRefresh').addEventListener('click', loadAdmin);
@@ -2017,7 +2078,7 @@
   }
 
   // Exposed for automated tests
-  window.PTApp = { state, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite, openFind, route };
+  window.PTApp = { state, openJobs, sapText, feedback, handleCode, openSearch, searchParts, openReview, sendReview, startMode, syncQueue, loadSite, openAdmin, showAdminTab, showSiteDetail, admin, openVan, vanShortfall, orderLines, orderParts, smartsheetUrl, chooseSite, openFind, route };
 
   init();
 })();
