@@ -231,6 +231,7 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 /* Stock count: a part that is extra flashes the scan screen orange and is tagged to take back */
 .extra-note { font-size: 0.82rem; color: var(--text-muted); margin-top: 2px; }
 .extra-note.take { color: var(--warn); font-weight: 700; }
+.extra-summary { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid #EA5504; color: var(--warn); font-weight: 700; font-size: 0.92rem; }
 .list li.is-extra { box-shadow: inset 4px 0 0 #EA5504; padding-left: 12px; }
 #view-scan.flash-extra::after { content: ''; position: fixed; inset: 0; background: #EA5504; pointer-events: none; z-index: 50; animation: flash-extra 0.9s ease-out forwards; }
 @keyframes flash-extra { 0% { opacity: 0.55; } 30% { opacity: 0.35; } 100% { opacity: 0; } }

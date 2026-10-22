@@ -434,12 +434,23 @@
     const idleSince = new Date(Date.now() - 90 * 86400000);
     appendObjects_('Movements', [
       { MovementID: 'x1', Timestamp: idleSince, SiteID: site.SiteID, Family: 'P019E7597X', ExactCode: 'P019E7597X', Qty: 1 - stockOf(site.SiteID, 'P019E7597X'), Type: 'BOOK_IN', By: 'T', Role: 'customer' },
-      { MovementID: 'x2', Timestamp: new Date(), SiteID: site.SiteID, Family: 'P127K5896X', ExactCode: 'P127K5896X', Qty: 1 - stockOf(site.SiteID, 'P127K5896X'), Type: 'BOOK_IN', By: 'T', Role: 'customer' }]);
+      { MovementID: 'x2', Timestamp: new Date(), SiteID: site.SiteID, Family: 'P127K5896X', ExactCode: 'P127K5896X', Qty: 1 - stockOf(site.SiteID, 'P127K5896X'), Type: 'BOOK_IN', By: 'T', Role: 'customer' },
+      { MovementID: 'x3', Timestamp: new Date(), SiteID: site.SiteID, Family: 'P053K9189X', ExactCode: 'P053K9189X', Qty: 2 - stockOf(site.SiteID, 'P053K9189X'), Type: 'BOOK_IN', By: 'T', Role: 'customer' }]);
     rows('Movements').filter(m => m.SiteID === site.SiteID && m.Family === 'P019E7597X' && m.MovementID !== 'x1').forEach(m =>   // the finger strip: nothing for 90 days
       SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Movements').getRange(m._row, col_('Movements', 'Timestamp')).setValue(idleSince));
     await A.loadSite();
     check('engineers get when each part was last delivered or used, and SurplusDays', A.state.data.surplusDays === 60 && A.state.data.lastSeen && A.state.data.lastSeen.P127K5896X && A.state.data.kit.P053K9189X === 1, A.state.data);
     check('customers are not sent it', call({ action: 'bootstrap', site: site.Token }).lastSeen === undefined);
+    // View stock: each part's kit amount, and the extras highlighted
+    $('viewStockBtn').click();
+    await waitFor(() => visible('view-stock'));
+    const stockLine = name => [...$('stockList').children].find(li => li.querySelector('.item-name').textContent === name);
+    check('View stock shows the kit amount and tags a kit part held above it', /P053K9189X · kit 1/.test(stockLine('Filter').textContent) && /1 extra: take back \(kit 1\)/.test(stockLine('Filter').textContent) && stockLine('Filter').classList.contains('is-extra'), stockLine('Filter') && stockLine('Filter').textContent);
+    check('View stock tags an idle non-kit part and notes a recent one', stockLine('Finger Strip PR').classList.contains('is-extra') && /Not kit: take back/.test(stockLine('Finger Strip PR').textContent) &&
+      !stockLine('Fusing Web Motor').classList.contains('is-extra') && /probably for a job/.test(stockLine('Fusing Web Motor').textContent));
+    check('View stock says how many parts are extra', !$('stockExtras').hidden && /^2 parts here are extra/.test($('stockExtras').textContent), $('stockExtras').textContent);
+    $('stockBack').click();
+    await waitFor(() => visible('view-home'));
     tile('COUNT').click(); await waitFor(() => visible('view-scan'));
     const flashed = () => $('view-scan').classList.contains('flash-extra');
     A.handleCode('P053K9189X', 'barcode');

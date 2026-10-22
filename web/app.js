@@ -553,9 +553,13 @@
    * waiting for a job: noted, not extra. Returns { extra, text } or null.
    */
   function extraInfo(family) {
-    if (state.mode !== 'COUNT' || state.where !== 'site' || !state.data || !state.data.lastSeen) return null;
+    if (state.mode !== 'COUNT' || state.where !== 'site') return null;
     const b = state.basket.find(x => x.family === family);
-    const n = b ? b.qty : 0;
+    return surplusFor(family, b ? b.qty : 0);
+  }
+  /** The same check for n of a part at this site (a count, or the stock on record). Engineers only (they get lastSeen). */
+  function surplusFor(family, n) {
+    if (!state.data || !state.data.lastSeen || n <= 0) return null;
     const kit = (state.data.kit || {})[family] || 0;
     if (kit > 0) return n > kit ? { extra: n - kit, text: (n - kit) + ' extra: take back (kit ' + kit + ')' } : null;
     const days = state.data.surplusDays || 60, seen = state.data.lastSeen[family];
@@ -565,8 +569,8 @@
     }
     return { extra: n, text: 'Not kit: take back' + (idle === null ? ' (nothing on record here)' : ' (nothing here for ' + idle + ' days)') };
   }
-  function extraNote(family) {
-    const x = extraInfo(family);
+  function extraNote(family, x) {
+    if (x === undefined) x = extraInfo(family);
     return x ? el('div', { class: 'extra-note' + (x.extra ? ' take' : '') }, x.text) : null;
   }
   function flashExtra() {
@@ -1430,11 +1434,22 @@
     $('stockTitle').textContent = inVan ? 'Stock in my van' : 'Stock at this site';
     const kit = {};
     if (inVan) (state.van && state.van.kit || []).forEach(k => { kit[k.family] = k; });
-    const rows = (cur() && cur().stock || []).filter(s => !q || (s.name || '').toLowerCase().includes(q) || s.family.toLowerCase().includes(q.replace(/\s/g, '')));
-    rows.forEach(s => list.append(el('li', {},
-      el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'),
-        el('div', { class: 'item-sub mono' }, s.family + (kit[s.family] ? ' · min ' + kit[s.family].min + ' · max ' + kit[s.family].max : ''))),
-      el('div', { class: 'qty' + (s.qty < 0 || (kit[s.family] && s.qty < kit[s.family].min) ? ' neg' : '') }, s.qty))));
+    // At a site, engineers also see each part's Up Time Kit amount and which parts are extra (to take back)
+    const siteKit = !inVan && state.data && state.data.lastSeen ? state.data.kit || {} : null;
+    const all = cur() && cur().stock || [];
+    const extraOf = s => siteKit ? surplusFor(s.family, s.qty) : null;
+    const extras = siteKit ? all.reduce((n, s) => n + ((extraOf(s) || {}).extra || 0), 0) : 0;
+    $('stockExtras').hidden = !extras;
+    $('stockExtras').textContent = extras ? (extras === 1 ? '1 part here is extra' : extras + ' parts here are extra') + ' (orange): take them back with Take to my van.' : '';
+    const rows = all.filter(s => !q || (s.name || '').toLowerCase().includes(q) || s.family.toLowerCase().includes(q.replace(/\s/g, '')));
+    rows.forEach(s => {
+      const x = extraOf(s);
+      const sub = s.family + (kit[s.family] ? ' · min ' + kit[s.family].min + ' · max ' + kit[s.family].max : '') + (siteKit && siteKit[s.family] ? ' · kit ' + siteKit[s.family] : '');
+      list.append(el('li', { class: x && x.extra ? 'is-extra' : '' },
+        el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'),
+          el('div', { class: 'item-sub mono' }, sub), extraNote(s.family, x)),
+        el('div', { class: 'qty' + (s.qty < 0 || (kit[s.family] && s.qty < kit[s.family].min) ? ' neg' : '') }, s.qty)));
+    });
     $('stockEmpty').hidden = rows.length > 0;
   }
 
