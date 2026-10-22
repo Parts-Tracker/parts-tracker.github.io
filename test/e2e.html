@@ -495,6 +495,61 @@
     putBack('VAN-E01', stockBeforeExtras.van);
     await A.loadSite();
 
+    // ---- Counts as: a part that can stand in for a kit part (e.g. press roll finger assemblies for different media) ----
+    appendObjects_('Kits', [{ Model: 'PC1120', Family: 'P053K9189X', Qty: 1 }]);   // for these checks only: the kit has 1 filter
+    appendObjects_('Parts', [{ Family: 'P053K9999X', Name: 'Filter (other media)', Reviewed: true, CountsAs: 'P053K9189X' }]);
+    check('setup gives the Parts tab a Counts as column', SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').getRange(1, col_('Parts', 'Counts as')).getValue() === 'Counts as');
+    const stockBeforeAlias = { site: stockBySite_(site.SiteID), van: stockBySite_('VAN-E01') };
+    const setAt = (loc, fam, qty) => appendObjects_('Movements', [{ MovementID: Utilities.getUuid(), Timestamp: new Date(), SiteID: loc, Family: fam, ExactCode: fam, Qty: qty - stockOf(loc, fam), Type: 'KIT_ADJUST', By: 'T', Role: 'admin' }]);
+    setAt(site.SiteID, 'P053K9189X', 0);
+    setAt(site.SiteID, 'P053K9999X', 1);
+    await A.loadSite();
+    check('the parts list tells the app what each part counts as', (A.state.parts.get('P053K9999X') || {}).countsAs === 'P053K9189X');
+    $('viewStockBtn').click(); await waitFor(() => visible('view-stock'));
+    const altLine = () => [...$('stockList').children].find(li => li.querySelector('.item-name').textContent === 'Filter (other media)');
+    check('View stock: the other code fills the kit, not flagged', altLine() && !altLine().classList.contains('is-extra') && /Counts as kit part P053K9189X \(kit 1\)/.test(altLine().textContent), altLine() && altLine().textContent);
+    $('stockBack').click(); await waitFor(() => visible('view-home'));
+    tile('COUNT').click(); await waitFor(() => visible('view-scan'));
+    A.handleCode('P053K9999X', 'barcode');
+    check('count: the other code alone is the kit, no flash', !$('view-scan').classList.contains('flash-extra') && !$('basketList').querySelector('.is-extra') && /Counts as kit part P053K9189X/.test($('basketList').textContent));
+    A.handleCode('P053K9189X', 'barcode');
+    const altBasket = [...$('basketList').children].find(li => /Filter \(other media\)/.test(li.textContent));
+    check('count: one of each with a kit of 1 flashes, and the other code is the extra', $('view-scan').classList.contains('flash-extra') && /Over the kit: Filter/.test($('toast').textContent) &&
+      altBasket.classList.contains('is-extra') && /1 extra: take back \(kit 1, counts as P053K9189X\)/.test(altBasket.textContent) && !/take back/.test([...$('basketList').children].find(li => li !== altBasket).textContent), $('basketList').textContent);
+    A.state.basket = []; $('scanCancel').click(); await waitFor(() => visible('view-home'));
+    // Evening email: using the other code is a kit use; the kit's own code is ordered
+    const aliasFrom = new Date(Date.now() - 1);
+    call({ action: 'submit', site: site.Token, batchId: 'al1', type: 'CUSTOMER_FITTED', items: [{ code: 'P053K9999X', qty: 1 }] });
+    const aliasUse = kitUsage_(aliasFrom, new Date(Date.now() + 1000)).find(u => u.site.SiteID === site.SiteID);
+    check('email: the other code used counts as the kit part, which is reordered', aliasUse && aliasUse.parts.length === 1 && aliasUse.parts[0].family === 'P053K9189X' && aliasUse.parts[0].qty === 1 && aliasUse.parts[0].onSite === 0, JSON.stringify(aliasUse));
+    // Surplus list: one of each with a kit of 1, the other code is the surplus
+    setAt(site.SiteID, 'P053K9189X', 1);
+    setAt(site.SiteID, 'P053K9999X', 1);
+    const aliasAdmin = call({ action: 'admin', session: call({ action: 'login', site: 'admin', pin: '9999' }).session });
+    const si0 = aliasAdmin.sites.findIndex(x => x.id === site.SiteID);
+    const surAt = f => aliasAdmin.surplus.find(l => l[0] === si0 && l[1] === f);
+    check('surplus: the kit is filled by its own code first, the other code is surplus', JSON.stringify(surAt('P053K9999X')) === JSON.stringify([si0, 'P053K9999X', 1, 'kit', 1]) && !surAt('P053K9189X'), aliasAdmin.surplus.filter(l => l[0] === si0));
+    check('a Counts as pointing at itself or an unknown code is ignored', JSON.stringify(countsAs_([{ Family: 'P1', CountsAs: 'P1' }, { Family: 'P2', CountsAs: 'P999K0000X' }, { Family: 'P053K9189X' }, { Family: 'P3', CountsAs: '053K 91890' }])) === JSON.stringify({ P3: 'P053K9189X' }));
+    // Van kit: the other code fills a van kit part too
+    appendObjects_('VanKit', [{ Family: 'P053K9189X', Min: 1, Max: 2 }]);
+    setAt('VAN-E01', 'P053K9189X', 0);
+    setAt('VAN-E01', 'P053K9999X', 2);   // above the minimum of 1 only if the other code counts
+    document.querySelector('#whereSwitch [data-where=van]').click();
+    await waitFor(() => visible('view-van'));
+    await A.openVan();
+    check('van kit: the other code counts towards the van kit part', await waitFor(() => (A.state.van.kit || []).some(k => k.family === 'P053K9189X') && !A.vanShortfall().some(k => k.family === 'P053K9189X')), A.vanShortfall());
+    // Put everything back
+    const vkSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('VanKit');
+    vkSheet.deleteRow(rows('VanKit').find(k => normaliseCode(k.Family).family === 'P053K9189X')._row);
+    kitsSheet.data.splice(rows('Kits').find(k => k.Model === 'PC1120' && k.Family === 'P053K9189X')._row - 1, 1);
+    putBack(site.SiteID, stockBeforeAlias.site);
+    putBack('VAN-E01', stockBeforeAlias.van);
+    setAt(site.SiteID, 'P053K9999X', 0); setAt('VAN-E01', 'P053K9999X', 0);
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Parts').deleteRow(rows('Parts').find(x => x.Family === 'P053K9999X')._row);
+    document.querySelector('#whereSwitch [data-where=site]').click();
+    await waitFor(() => visible('view-home'));
+    await A.loadSite();
+
     // ---- From my van: parts left at a site in person, or posted to a site (on its way until they arrive) ----
     const otherSite = rows('Sites')[1];
     const stockBeforePosts = { [site.SiteID]: stockBySite_(site.SiteID), [otherSite.SiteID]: stockBySite_(otherSite.SiteID) };   // put back afterwards

@@ -84,6 +84,8 @@
   }
   const isEngineer = () => !!state.user && /^(engineer|admin)$/i.test(state.user.role);
   const partName = family => (state.parts.get(family) || {}).name || '';
+  /** The kit part a part counts as (the Parts tab's Counts as), or the part itself. */
+  const asKit = family => (state.parts.get(family) || {}).countsAs || family;
 
   let toastTimer = null;
   function toast(msg, action) {
@@ -147,7 +149,7 @@
   function setParts(version, list) {
     state.partsVersion = version || '';
     state.parts = new Map();
-    (list || []).forEach(([family, name, codes]) => state.parts.set(family, { family, name, codes: String(codes || '') }));
+    (list || []).forEach(([family, name, codes, countsAs]) => state.parts.set(family, { family, name, codes: String(codes || ''), countsAs: countsAs || '' }));
   }
   function loadPartsCache() {
     const c = store.get('pt_parts', null);
@@ -496,9 +498,9 @@
     if (part) {
       addToBasket(n, part.name, false);
       const x = extraInfo(n.family);
-      if (x && x.extra) { feedback('extra'); flashExtra(); }
+      if (x && x.over) { feedback('extra'); flashExtra(); }
       else feedback('good');
-      toast((x && x.extra ? 'Extra, take back: ' : 'Added: ') + part.name, { label: 'Undo', fn: () => changeQty(n.family, -1) });
+      toast((x && x.extra ? 'Extra, take back: ' : x && x.over ? 'Over the kit: ' : 'Added: ') + part.name, { label: 'Undo', fn: () => changeQty(n.family, -1) });
       setTimeout(resumeScan, 600);
     } else {
       feedback('attention');
@@ -554,24 +556,40 @@
    */
   function extraInfo(family) {
     if (state.mode !== 'COUNT' || state.where !== 'site') return null;
-    const b = state.basket.find(x => x.family === family);
-    return surplusFor(family, b ? b.qty : 0);
+    const qtyOf = f => (state.basket.find(x => x.family === f) || {}).qty || 0;
+    return surplusFor(family, qtyOf(family), qtyOf);
   }
-  /** The same check for n of a part at this site (a count, or the stock on record). Engineers only (they get lastSeen). */
-  function surplusFor(family, n) {
+  /**
+   * The same check for n of a part at this site (a count, or the stock on record); qtyOf gives the other parts' numbers
+   * there. Parts that count as the same kit part share the kit, the kit's own code first. Engineers only (they get
+   * lastSeen). Returns { extra, over (the kit part is over its kit: flash), text } or null.
+   */
+  function surplusFor(family, n, qtyOf) {
     if (!state.data || !state.data.lastSeen || n <= 0) return null;
-    const kit = (state.data.kit || {})[family] || 0;
-    if (kit > 0) return n > kit ? { extra: n - kit, text: (n - kit) + ' extra: take back (kit ' + kit + ')' } : null;
+    const kitCode = asKit(family), kit = (state.data.kit || {})[kitCode] || 0;
+    if (kit > 0) {
+      const group = [kitCode].concat([...state.parts.values()].filter(p => p.countsAs === kitCode).map(p => p.family).sort());
+      if (!group.includes(family)) group.push(family);
+      let left = kit, total = 0, extra = 0;
+      group.forEach(f => {
+        const q = f === family ? n : Math.max(0, qtyOf(f) || 0), keep = Math.min(q, left);
+        left -= keep; total += q;
+        if (f === family) extra = q - keep;
+      });
+      const as = kitCode !== family ? ', counts as ' + kitCode : '';
+      if (extra > 0) return { extra, over: true, text: extra + ' extra: take back (kit ' + kit + as + ')' };
+      return as || total > kit ? { extra: 0, over: total > kit, text: as ? 'Counts as kit part ' + kitCode + ' (kit ' + kit + ')' : '' } : null;
+    }
     const days = state.data.surplusDays || 60, seen = state.data.lastSeen[family];
     const idle = seen ? Math.max(0, Math.floor((Date.now() - new Date(seen)) / 86400000)) : null;
     if (idle !== null && idle < days) {
-      return { extra: 0, text: 'Not kit · delivered or used here ' + (idle ? idle + (idle === 1 ? ' day' : ' days') + ' ago' : 'today') + ': probably for a job' };
+      return { extra: 0, over: false, text: 'Not kit · delivered or used here ' + (idle ? idle + (idle === 1 ? ' day' : ' days') + ' ago' : 'today') + ': probably for a job' };
     }
-    return { extra: n, text: 'Not kit: take back' + (idle === null ? ' (nothing on record here)' : ' (nothing here for ' + idle + ' days)') };
+    return { extra: n, over: true, text: 'Not kit: take back' + (idle === null ? ' (nothing on record here)' : ' (nothing here for ' + idle + ' days)') };
   }
   function extraNote(family, x) {
     if (x === undefined) x = extraInfo(family);
-    return x ? el('div', { class: 'extra-note' + (x.extra ? ' take' : '') }, x.text) : null;
+    return x && x.text ? el('div', { class: 'extra-note' + (x.extra ? ' take' : '') }, x.text) : null;
   }
   function flashExtra() {
     const v = $('view-scan');
@@ -1073,7 +1091,7 @@
    */
   function vanShortfall() {
     const have = {};
-    (state.van && state.van.stock || []).forEach(s => { have[s.family] = s.qty; });
+    (state.van && state.van.stock || []).forEach(s => { const f = asKit(s.family); have[f] = (have[f] || 0) + s.qty; });
     const ordered = orderedParts();
     return (state.van && state.van.kit || []).map(k => Object.assign({ have: have[k.family] || 0 }, k))
       .filter(k => k.min > 0 && k.have <= k.min)
@@ -1437,7 +1455,9 @@
     // At a site, engineers also see each part's Up Time Kit amount and which parts are extra (to take back)
     const siteKit = !inVan && state.data && state.data.lastSeen ? state.data.kit || {} : null;
     const all = cur() && cur().stock || [];
-    const extraOf = s => siteKit ? surplusFor(s.family, s.qty) : null;
+    const held = f => (all.find(x => x.family === f) || {}).qty || 0;
+    const vanHave = f => all.filter(x => asKit(x.family) === f).reduce((n, x) => n + x.qty, 0);   // with parts that count as it
+    const extraOf = s => siteKit ? surplusFor(s.family, s.qty, held) : null;
     const extras = siteKit ? all.reduce((n, s) => n + ((extraOf(s) || {}).extra || 0), 0) : 0;
     $('stockExtras').hidden = !extras;
     $('stockExtras').textContent = extras ? (extras === 1 ? '1 part here is extra' : extras + ' parts here are extra') + ' (orange): take them back with Take to my van.' : '';
@@ -1448,7 +1468,7 @@
       list.append(el('li', { class: x && x.extra ? 'is-extra' : '' },
         el('div', { class: 'item-main' }, el('div', { class: 'item-name' }, s.name || partName(s.family) || 'Unknown part'),
           el('div', { class: 'item-sub mono' }, sub), extraNote(s.family, x)),
-        el('div', { class: 'qty' + (s.qty < 0 || (kit[s.family] && s.qty < kit[s.family].min) ? ' neg' : '') }, s.qty)));
+        el('div', { class: 'qty' + (s.qty < 0 || (kit[s.family] && vanHave(s.family) < kit[s.family].min) ? ' neg' : '') }, s.qty)));
     });
     $('stockEmpty').hidden = rows.length > 0;
   }
@@ -1484,7 +1504,7 @@
   function applyAdmin(r, fromSaved) {
       if (!fromSaved) { const keep = Object.assign({}, r); delete keep.ok; store.set('pt_admin', keep); }
       admin.data = r;
-      admin.parts = new Map((r.parts || []).map(([family, name, codes]) => [family, { family, name, codes: String(codes || '') }]));
+      admin.parts = new Map((r.parts || []).map(([family, name, codes, countsAs]) => [family, { family, name, codes: String(codes || ''), countsAs: countsAs || '' }]));
       admin.byFamily = new Map();
       admin.bySite = r.sites.map(() => []);
       (r.stock || []).forEach(([si, family, qty]) => {

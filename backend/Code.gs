@@ -15,7 +15,7 @@ const SHEET_ID = '';
 
 // Column headings as people see them in the Sheet -> the name the code uses.
 // "Part Number" holds the family code (e.g. P053K0667X); sheets made before the rename still say "Family".
-const HEADER_KEYS = { 'Part Number': 'Family', 'No kit': 'NoKit' };
+const HEADER_KEYS = { 'Part Number': 'Family', 'No kit': 'NoKit', 'Counts as': 'CountsAs' };
 // Headings are matched ignoring case and spaces, so "No Kit" or "No kit " still work
 const HEADER_KEYS_LOOSE = {};
 Object.keys(HEADER_KEYS).forEach(h => { HEADER_KEYS_LOOSE[h.toLowerCase().replace(/\s+/g, '')] = HEADER_KEYS[h]; });
@@ -27,7 +27,7 @@ const noKit_ = p => { const v = String(p.NoKit == null ? '' : p.NoKit).trim(); r
 const SHEETS = {
   Sites: ['SiteID', 'Name', 'Address', 'Postcode', 'Token', 'Active', 'LastCount'],   // no customer contact details are kept
   Printers: ['SiteID', 'Model', 'Serial', 'No kit'],   // No kit TRUE: a machine with no Up Time Kit (e.g. a training machine)
-  Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt'],
+  Parts: ['Part Number', 'Name', 'ExactCodes', 'Cost', 'Reviewed', 'AddedBy', 'AddedAt', 'Counts as'],   // Counts as: another part number this one can stand in for in a kit
   Users: ['UserID', 'Name', 'Role', 'PIN', 'PinHash', 'Active', 'Email', 'Postcode', 'ByBox'],   // last three fill the van order form
   Movements: ['MovementID', 'Timestamp', 'SiteID', 'Part Number', 'ExactCode', 'Qty', 'Type', 'JobNo', 'By', 'Role', 'Device', 'Note', 'BatchID', 'Source'],
   Kits: ['Model', 'Part Number', 'Qty', 'Name'],   // Name is a lookup from the Parts tab, filled in by setup
@@ -124,7 +124,7 @@ function actionBootstrap(req) {
     onItsWay: waiting.map(w => ({ family: w.Family, name: names[w.Family] || '', qty: w.Qty, by: w.From, at: iso_(w.Posted), jobNo: w.JobNo })),
     partsVersion: partsVersion_(parts)
   };
-  if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
+  if (req.partsVersion !== out.partsVersion) out.parts = partList_(parts);
   if (req.session) {
     const user = sessionUser_(req.session, true);
     if (user) out.user = { name: user.Name, role: user.Role };
@@ -371,7 +371,7 @@ function actionVan(req) {
     partsVersion: partsVersion_(parts),
     user: { name: user.Name, role: user.Role }
   };
-  if (req.partsVersion !== out.partsVersion) out.parts = parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]);
+  if (req.partsVersion !== out.partsVersion) out.parts = partList_(parts);
   return out;
 }
 
@@ -452,7 +452,7 @@ function actionAdmin(req) {
   });
   const parts = readTable_('Parts');
   const vans = vanHoldings_(stockAt, user);
-  const spare = surplus_(sites, moves, stockAt, printers, kitRows);
+  const spare = surplus_(sites, moves, stockAt, printers, kitRows, countsAs_(parts));
   return {
     vans: vans.vans,
     vanStock: vans.stock,
@@ -471,7 +471,7 @@ function actionAdmin(req) {
     models: knownModels_(printers, kitRows),
     kits: kitsByModel_(kitRows),
     stock: stock,
-    parts: parts.map(p => [p.Family, p.Name, String(p.ExactCodes || '')]),
+    parts: partList_(parts),
     unreviewedParts: parts.filter(p => !isTrue_(p.Reviewed)).length,
     newParts: parts.filter(p => !isTrue_(p.Reviewed)).map(p => ({
       family: p.Family, name: p.Name, codes: String(p.ExactCodes || ''), addedBy: p.AddedBy, addedAt: iso_(p.AddedAt)
@@ -541,7 +541,8 @@ function recountDays_() { return settingDays_('RecountDays', 90); }
  * Returns { surplus: [[siteIndex, family, qty, 'kit', kitQty] | [siteIndex, family, qty, 'idle', idleDays]],
  *           soon: [[siteIndex, family, qty, daysLeft]], days }.
  */
-function surplus_(sites, moves, stockAt, printers, kitRows) {
+function surplus_(sites, moves, stockAt, printers, kitRows, alias) {
+  const asKit = f => (alias || {})[f] || f;
   const days = settingDays_('SurplusDays', 60);
   const want = kitWanted_(printers, kitRows);
   const last = {};   // "site|family" -> when that part was last delivered, counted in, or used there
@@ -553,10 +554,20 @@ function surplus_(sites, moves, stockAt, printers, kitRows) {
   sites.forEach((s, i) => {
     const id = String(s.SiteID), held = stockAt[id] || {}, w = want[id] || {};
     if (!isTrue_(s.Active)) return;
+    // Kit parts (and parts that count as them): the kit is filled from the kit's own code first, the rest is surplus
+    const byKit = {};
+    Object.keys(held).forEach(f => { const k = asKit(f); if (held[f] > 0 && w[k] > 0) (byKit[k] = byKit[k] || []).push(f); });
+    Object.keys(byKit).forEach(k => {
+      let left = w[k];
+      byKit[k].sort((a, b) => a === k ? -1 : b === k ? 1 : a.localeCompare(b)).forEach(f => {
+        const keep = Math.min(held[f], left);
+        left -= keep;
+        if (held[f] > keep) surplus.push([i, f, held[f] - keep, 'kit', w[k]]);
+      });
+    });
     Object.keys(held).forEach(f => {
       const qty = held[f];
-      if (qty <= 0) return;
-      if (w[f] > 0) { if (qty > w[f]) surplus.push([i, f, qty - w[f], 'kit', w[f]]); return; }
+      if (qty <= 0 || w[asKit(f)] > 0) return;
       const t = last[id + '|' + f];
       const idle = t ? Math.floor((now - t.getTime()) / 86400000) : days;
       if (idle >= days) surplus.push([i, f, qty, 'idle', idle]);
@@ -960,8 +971,35 @@ function partNames_(parts) {
 }
 
 function partsVersion_(parts) {
-  const text = parts.map(p => p.Family + '|' + p.Name + '|' + p.ExactCodes).join('\n');
+  const text = parts.map(p => p.Family + '|' + p.Name + '|' + p.ExactCodes + '|' + (p.CountsAs || '')).join('\n');
   return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, text, Utilities.Charset.UTF_8));
+}
+
+/** The parts list for the app: [family, name, exact codes, the kit part it counts as ('' if none)]. */
+function partList_(parts) {
+  const as = countsAs_(parts);
+  return parts.map(p => [p.Family, p.Name, String(p.ExactCodes || ''), as[p.Family] || '']);
+}
+
+/**
+ * Parts that can stand in for another in a kit (the Parts tab's Counts as column, e.g. two press roll finger
+ * assemblies for different media): { family: the kit part it counts as }. Codes that aren't in the parts list,
+ * or point at themselves, are ignored; a chain (A counts as B, B as C) goes to the end, stopping at a loop.
+ */
+function countsAs_(parts) {
+  const known = {}, link = {}, out = {};
+  parts.forEach(p => { known[p.Family] = true; });
+  parts.forEach(p => {
+    const to = normaliseCode(p.CountsAs).family;
+    if (to && to !== p.Family && known[to]) link[p.Family] = to;
+  });
+  Object.keys(link).forEach(f => {
+    let to = link[f];
+    const seen = [f];
+    while (link[to] && seen.indexOf(to) < 0) { seen.push(to); to = link[to]; }
+    if (to !== f) out[f] = to;
+  });
+  return out;
 }
 
 function addExactCode_(part, exact) {
@@ -1248,7 +1286,9 @@ function kitUsage_(from, to) {
     if (m && list.indexOf(m) < 0) list.push(m);   // a site with two SC180s lists SC180 once
   });
   const want = kitWanted_(printers);
-  const names = partNames_(readTable_('Parts'));
+  const parts = readTable_('Parts');
+  const names = partNames_(parts);
+  const alias = countsAs_(parts);
   const inPeriod = t => t instanceof Date && t > from && t <= to;   // after the last report, up to now
   const used = {}, stock = {}, counted = {};
   Object.keys(sites).forEach(id => { if (inPeriod(sites[id].LastCount)) counted[id] = true; });
@@ -1256,13 +1296,14 @@ function kitUsage_(from, to) {
     if (!sites[m.site] || !want[m.site]) return;
     const t = m.row.Timestamp;
     if (t instanceof Date && t > to) return;   // stock as it was at the end of the period
+    const f = alias[m.family] || m.family;   // e.g. the other press roll finger assembly is the kit's one
     const st = stock[m.site] = stock[m.site] || {};
-    st[m.family] = (st[m.family] || 0) + m.qty;
+    st[f] = (st[f] || 0) + m.qty;
     if (!inPeriod(t)) return;
     if (String(m.row.Type) === 'COUNT') counted[m.site] = true;
-    if (!want[m.site][m.family] || !kitTake_(m)) return;
+    if (!want[m.site][f] || !kitTake_(m)) return;
     const u = used[m.site] = used[m.site] || {};
-    u[m.family] = (u[m.family] || 0) - m.qty;
+    u[f] = (u[f] || 0) - m.qty;
   });
   const ids = Object.keys(want).filter(id => sites[id] && (used[id] || (counted[id] && isTrue_(sites[id].Active))));
   return ids.map(id => {
