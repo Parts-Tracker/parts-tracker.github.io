@@ -1862,8 +1862,10 @@
     $('machineAdd').hidden = !s.active;
     $('siteClose').textContent = s.active ? 'Close this site' : 'Reopen this site';
     $('siteClose').className = 'btn' + (s.active ? ' danger' : ' primary');
-    ['find', 'sites', 'new', 'qr'].forEach(t => { $('admin-' + t).hidden = true; });
-    $('admin-site').hidden = false;
+    // Only the site page shows (every other panel hidden); Back returns to the tab it was opened from
+    if (!keepScroll && admin.tab !== 'site') admin.siteFrom = admin.tab;
+    document.querySelectorAll('#view-admin .admin-panel').forEach(p => { p.hidden = p.id !== 'admin-site'; });
+    $('siteBack').textContent = '‹ ' + ({ find: 'Find a part', surplus: 'Surplus', new: 'New parts', qr: 'QR codes' }[admin.siteFrom] || 'All sites');
     if (!keepScroll) window.scrollTo(0, 0);
   }
 
@@ -2130,7 +2132,7 @@
     $('partQuery').addEventListener('input', renderPartResults);
     $('siteQuery').addEventListener('input', renderSites);
     $('siteSort').addEventListener('change', renderSites);
-    $('siteBack').addEventListener('click', () => showAdminTab('sites'));
+    $('siteBack').addEventListener('click', () => showAdminTab(admin.siteFrom || 'sites'));
     $('siteAdd').addEventListener('click', () => openSiteForm(null));
     $('siteEdit').addEventListener('click', () => openSiteForm(curSite()));
     $('machineAdd').addEventListener('click', openAddMachine);

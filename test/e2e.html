@@ -1035,6 +1035,7 @@
     [...$('siteList').querySelectorAll('li')].find(li => /Sample Print Co/.test(li.textContent)).click();
     check('site detail shows its stock and printer', !$('admin-site').hidden && /Tray 1\/2 Feed Roll/.test($('siteDetailStock').textContent) && /PC1120/.test($('siteDetailHead').textContent));
     check('site detail links to the site in the app', $('siteDetailOpen').getAttribute('href').endsWith('?s=' + site.Token));
+    check('from the sites list, Back says All sites', $('siteBack').textContent === '‹ All sites');
     $('siteBack').click();
     check('back returns to the sites list', !$('admin-sites').hidden && $('admin-site').hidden);
 
@@ -1244,6 +1245,14 @@
       const surText = $('admin-surplus').textContent;
       check('Surplus tab lists the site, the parts and why', visible('admin-surplus') && /Surplus Test Ltd/.test(surText) && /2nd BTR/.test(surText) && /Above the kit: kit is 1/.test(surText) &&
         /Not used or delivered for 9\d days/.test(surText) && /Becoming surplus/.test(surText) && /surplus in 50 days/.test(surText), surText.slice(0, 400));
+      // Opening a site from Surplus shows only that site's page, and Back returns to Surplus
+      $('surplusSoonList').querySelector('li').click();
+      check('a site opened from Becoming surplus shows only the site page', visible('admin-site') && $('admin-surplus').hidden && [...document.querySelectorAll('#view-admin .admin-panel')].filter(p => !p.hidden).length === 1 && $('siteBack').textContent === '‹ Surplus', $('siteBack').textContent);
+      $('siteBack').click();
+      check('Back from that site returns to Surplus', visible('admin-surplus') && $('admin-site').hidden);
+      $('surplusList').querySelector('.part-head').click();
+      check('the same from a surplus site card', visible('admin-site') && $('admin-surplus').hidden && $('siteBack').textContent === '‹ Surplus');
+      $('siteBack').click();
     } else check('Surplus tab check needs the admin signed in', false, A.state.user);
 
     // ---- Safeguards on the Movements tab ----
