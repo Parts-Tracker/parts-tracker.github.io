@@ -117,10 +117,11 @@
   }
   /** 'good' = part added (one high beep); 'attention' = needs a look (two low beeps). */
   function feedback(kind) {
-    try { if (navigator.vibrate) navigator.vibrate(kind === 'good' ? 90 : [70, 60, 70]); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate(kind === 'good' ? 90 : kind === 'extra' ? [220, 90, 220] : [70, 60, 70]); } catch (e) {}
     try {
       if (!audioCtx) return;
       if (kind === 'good') tone(1500, 0, 0.12);
+      else if (kind === 'extra') { tone(330, 0, 0.22); tone(330, 0.3, 0.22); }
       else { tone(520, 0, 0.12); tone(520, 0.18, 0.12); }
     } catch (e) {}
   }
@@ -451,6 +452,11 @@
       askPin(() => startMode(mode), 'Engineers only: sign in');
       return;
     }
+    prepareMode(mode);
+    show('view-scan');
+    startCamera();
+  }
+  function prepareMode(mode) {
     state.mode = mode;
     state.basket = [];
     const words = state.where === 'van' ? VAN_MODES[mode] : MODES[mode];
@@ -460,8 +466,6 @@
     $('scanHint').textContent = words.hint;
     $('basketTitle').textContent = mode === 'COUNT' ? 'Counted' : 'Scanned';
     renderBasket();
-    show('view-scan');
-    startCamera();
   }
 
   async function startCamera(deviceId) {
@@ -490,9 +494,11 @@
     if (!n.family) { resumeScan(); return; }
     const part = state.parts.get(n.family);
     if (part) {
-      feedback('good');
       addToBasket(n, part.name, false);
-      toast('Added: ' + part.name, { label: 'Undo', fn: () => changeQty(n.family, -1) });
+      const x = extraInfo(n.family);
+      if (x && x.extra) { feedback('extra'); flashExtra(); }
+      else feedback('good');
+      toast((x && x.extra ? 'Extra, take back: ' : 'Added: ') + part.name, { label: 'Undo', fn: () => changeQty(n.family, -1) });
       setTimeout(resumeScan, 600);
     } else {
       feedback('attention');
@@ -541,12 +547,40 @@
     if (b.qty <= 0) state.basket = state.basket.filter(x => x !== b);
     renderBasket();
   }
+  /**
+   * While counting at a site (engineers): is this part extra? A kit part above the site's kit, or a part not in the
+   * kit with no delivery or use here for SurplusDays (the Surplus list's rules). A recent non-kit part is probably
+   * waiting for a job: noted, not extra. Returns { extra, text } or null.
+   */
+  function extraInfo(family) {
+    if (state.mode !== 'COUNT' || state.where !== 'site' || !state.data || !state.data.lastSeen) return null;
+    const b = state.basket.find(x => x.family === family);
+    const n = b ? b.qty : 0;
+    const kit = (state.data.kit || {})[family] || 0;
+    if (kit > 0) return n > kit ? { extra: n - kit, text: (n - kit) + ' extra: take back (kit ' + kit + ')' } : null;
+    const days = state.data.surplusDays || 60, seen = state.data.lastSeen[family];
+    const idle = seen ? Math.max(0, Math.floor((Date.now() - new Date(seen)) / 86400000)) : null;
+    if (idle !== null && idle < days) {
+      return { extra: 0, text: 'Not kit · delivered or used here ' + (idle ? idle + (idle === 1 ? ' day' : ' days') + ' ago' : 'today') + ': probably for a job' };
+    }
+    return { extra: n, text: 'Not kit: take back' + (idle === null ? ' (nothing on record here)' : ' (nothing here for ' + idle + ' days)') };
+  }
+  function extraNote(family) {
+    const x = extraInfo(family);
+    return x ? el('div', { class: 'extra-note' + (x.extra ? ' take' : '') }, x.text) : null;
+  }
+  function flashExtra() {
+    const v = $('view-scan');
+    v.classList.remove('flash-extra'); void v.offsetWidth; v.classList.add('flash-extra');
+    setTimeout(() => v.classList.remove('flash-extra'), 900);
+  }
+
   function renderBasket() {
     const list = $('basketList'); list.textContent = '';
-    state.basket.forEach(b => list.append(el('li', {},
+    state.basket.forEach(b => list.append(el('li', { class: (extraInfo(b.family) || {}).extra ? 'is-extra' : '' },
       el('div', { class: 'item-main' },
         el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
-        el('div', { class: 'item-sub mono' }, b.family)),
+        el('div', { class: 'item-sub mono' }, b.family), extraNote(b.family)),
       el('div', { class: 'stepper' },
         el('button', { 'aria-label': 'One less', onclick: () => changeQty(b.family, -1) }, '−'),
         el('span', { class: 'qty' }, b.qty),
@@ -653,7 +687,7 @@
       const li = el('li', {},
         el('div', { class: 'item-main' },
           el('div', { class: 'item-name' }, b.name, b.isNew ? el('span', { class: 'tag' }, 'new part') : null),
-          el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : ''))),
+          el('div', { class: 'item-sub mono' }, b.family + (mode === 'COUNT' ? ' · on record: ' + (stock[b.family] || 0) : '')), extraNote(b.family)),
         el('div', { class: 'qty' }, b.qty));
       if (mode === 'USED') {
         // Still recorded as used (a kit site gets it reordered), but marked for the warranty claim
@@ -796,6 +830,7 @@
     // (the server takes a few seconds, and the phone may have no signal)
     if (batch.van && mode === 'BOOK_IN') clearOrdered(state.basket.map(b => b.family));
     state.doneSap = mode === 'USED' ? sapText(state.basket) : '';
+    state.doneExtras = state.basket.map(b => Object.assign({}, b, { qty: (extraInfo(b.family) || {}).extra || 0, failed: 0 })).filter(b => b.qty > 0);
     state.queue.push(batch);
     saveQueue();
     applyLocally(batch);
@@ -857,10 +892,25 @@
       : parts + ' recorded at ' + batch.siteName + '.';
     $('doneHome').textContent = batch.van ? 'Back to my van' : 'Back to site';
     $('doneCopy').hidden = batch.type !== 'USED' || !state.doneSap;
+    const extras = batch.type === 'COUNT' && state.doneExtras || [], nExtra = extras.reduce((n, b) => n + b.qty, 0);
+    $('doneExtras').hidden = !nExtra;
+    $('doneExtras').textContent = 'Take the ' + (nExtra === 1 ? 'extra part' : nExtra + ' extra parts') + ' to my van';
     $('doneStatus').textContent = 'Sending…';
     $('doneStatus').className = 'send-status';
     $('doneWarn').hidden = true;
     show('view-done');
+  }
+
+  /** The extras a count found go straight to the Take to my van review (the count is sent first). */
+  function takeExtras() {
+    const extras = state.doneExtras || [];
+    if (!extras.length || !state.data) return;
+    state.where = 'site';
+    prepareMode('TO_VAN');
+    state.basket = extras;
+    state.doneExtras = [];
+    renderBasket();
+    openReview();
   }
 
   function belowZeroText(families) {
@@ -1462,6 +1512,22 @@
       stat(items, 'items at ' + holding + (holding === 1 ? ' site' : ' sites'), 'lime'),
       stat(need, need === 1 ? 'site needs a count' : 'sites need a count', need ? 'pink' : 'blue', need ? showNeedCount : null),
       stat(toCheck, toCheck === 1 ? 'new part to check' : 'new parts to check', toCheck ? 'purple' : 'blue', toCheck ? showNewParts : null));
+    renderRecovered();
+  }
+
+  /** Parts taken back from sites and returned to Ceva, with their value once the Parts tab has prices. */
+  function renderRecovered() {
+    const r = admin.data.recovered, box = $('adminRecovered');
+    box.textContent = '';
+    box.hidden = !r || !(r.fromSites || r.returned);
+    if (box.hidden) return;
+    const money = v => '£' + v.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    const parts = n => n + (n === 1 ? ' part' : ' parts');
+    box.append(el('div', { class: 'stat tone-orange recovered' },
+      el('div', { class: 'stat-value' }, r.priced ? money(r.fromSitesValue) : parts(r.fromSites)),
+      el('div', { class: 'stat-label' }, (r.priced ? parts(r.fromSites) + ' ' : '') + 'taken back from customer sites · ' + parts(r.returned) + ' returned to Ceva' +
+        (r.priced ? ' (' + money(r.returnedValue) + ')' : '')),
+      r.priced && r.unpriced ? el('div', { class: 'stat-label' }, r.unpriced + ' of them have no price yet (Parts tab, Cost column)') : null));
   }
 
   /** Why an open site needs a count ('' if it doesn't): stock below zero, never counted, or recount due. */
@@ -2021,6 +2087,7 @@
     }));
     $('doneHome').addEventListener('click', goHome);
     $('doneCopy').addEventListener('click', () => copyText(state.doneSap));
+    $('doneExtras').addEventListener('click', takeExtras);
     $('sheetBackdrop').addEventListener('click', closeSheet);
     $('printQr').addEventListener('click', () => window.print());
     $('adminRefresh').addEventListener('click', loadAdmin);

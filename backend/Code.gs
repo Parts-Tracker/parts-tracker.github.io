@@ -130,6 +130,11 @@ function actionBootstrap(req) {
     if (user) out.user = { name: user.Name, role: user.Role };
     // Engineers are warned before taking a part that would leave the site's Up Time Kit short
     if (user && printers.length) out.kit = kitWanted_(printers)[String(site.SiteID)] || {};
+    // ...and told, while counting, which parts are extra and should go back (the same rules as the Surplus list)
+    if (user) {
+      out.surplusDays = settingDays_('SurplusDays', 60);
+      out.lastSeen = lastSeen_(moves);
+    }
   }
   return out;
 }
@@ -454,6 +459,7 @@ function actionAdmin(req) {
     surplus: spare.surplus,
     surplusSoon: spare.soon,
     surplusDays: spare.days,
+    recovered: recovered_(moves, parts),
     recountDays: recountDays_(),
     sites: sites.map(s => ({
       id: s.SiteID, name: s.Name, town: s.Address, postcode: s.Postcode, token: s.Token,
@@ -558,6 +564,43 @@ function surplus_(sites, moves, stockAt, printers, kitRows) {
     });
   });
   return { surplus: surplus, soon: soon, days: days };
+}
+
+/** When each part last changed at a site (delivered, used, counted in): { family: iso }, from that site's movements. */
+function lastSeen_(moves) {
+  const last = {};
+  moves.forEach(m => {
+    const t = m.row.Timestamp;
+    if (t instanceof Date && m.qty !== 0 && (!last[m.family] || t > last[m.family])) last[m.family] = t;
+  });
+  Object.keys(last).forEach(f => { last[f] = iso_(last[f]); });
+  return last;
+}
+
+/** A part's price from the Parts tab's Cost column ("£12.50", "12.5"), or 0 if there is none. */
+const cost_ = v => { const n = Number(String(v == null ? '' : v).replace(/[£,\s]/g, '')); return isFinite(n) && n > 0 ? n : 0; };
+
+/**
+ * Parts recovered: taken back from customer sites into a van (Take to my van, extras found by a count) and
+ * returned to Ceva, with their value where the Parts tab has a Cost. { fromSites, fromSitesValue, returned,
+ * returnedValue, priced, unpriced } - unpriced: how many of those parts have no Cost yet.
+ */
+function recovered_(moves, parts) {
+  const price = {};
+  parts.forEach(p => { price[p.Family] = cost_(p.Cost); });
+  const out = { fromSites: 0, fromSitesValue: 0, returned: 0, returnedValue: 0, priced: parts.some(p => price[p.Family] > 0), unpriced: 0 };
+  moves.forEach(m => {
+    const type = String(m.row.Type);
+    const qty = type === 'FROM_SITE' ? m.qty : type === 'RETURNED' ? -m.qty : 0;
+    if (qty <= 0) return;
+    const key = type === 'FROM_SITE' ? 'fromSites' : 'returned';
+    out[key] += qty;
+    out[key + 'Value'] += qty * (price[m.family] || 0);
+    if (!price[m.family]) out.unpriced += qty;
+  });
+  out.fromSitesValue = Math.round(out.fromSitesValue * 100) / 100;
+  out.returnedValue = Math.round(out.returnedValue * 100) / 100;
+  return out;
 }
 
 /**

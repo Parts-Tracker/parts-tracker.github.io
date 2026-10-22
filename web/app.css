@@ -226,6 +226,15 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .stat { background: var(--surface); border-radius: var(--radius); padding: 12px 14px; box-shadow: inset 0 0 0 2px var(--tone-solid, var(--border)), var(--shadow); }
 .stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1.1; color: var(--tone-ink, var(--text)); }
 .stat-label { font-size: 0.82rem; color: var(--text-muted); }
+#adminRecovered { margin: -4px 0 14px; }
+.recovered .stat-label + .stat-label { margin-top: 2px; }
+/* Stock count: a part that is extra flashes the scan screen orange and is tagged to take back */
+.extra-note { font-size: 0.82rem; color: var(--text-muted); margin-top: 2px; }
+.extra-note.take { color: var(--warn); font-weight: 700; }
+.list li.is-extra { box-shadow: inset 4px 0 0 #EA5504; padding-left: 12px; }
+#view-scan.flash-extra::after { content: ''; position: fixed; inset: 0; background: #EA5504; pointer-events: none; z-index: 50; animation: flash-extra 0.9s ease-out forwards; }
+@keyframes flash-extra { 0% { opacity: 0.55; } 30% { opacity: 0.35; } 100% { opacity: 0; } }
+.extras-btn { color: var(--tone-ink); border-color: var(--tone-solid); background: var(--tone-bg); font-weight: 700; }
 button.stat { display: block; width: 100%; min-height: 0; text-align: left; border: 0; cursor: pointer; }
 button.stat .stat-label { color: var(--tone-ink, var(--text)); font-weight: 600; }
 .new-part { display: grid; gap: 4px; }
