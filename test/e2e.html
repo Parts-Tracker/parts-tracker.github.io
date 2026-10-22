@@ -529,6 +529,8 @@
     const si0 = aliasAdmin.sites.findIndex(x => x.id === site.SiteID);
     const surAt = f => aliasAdmin.surplus.find(l => l[0] === si0 && l[1] === f);
     check('surplus: the kit is filled by its own code first, the other code is surplus', JSON.stringify(surAt('P053K9999X')) === JSON.stringify([si0, 'P053K9999X', 1, 'kit', 1]) && !surAt('P053K9189X'), aliasAdmin.surplus.filter(l => l[0] === si0));
+    check('a link typed both ways works: the kit part never counts as the other', JSON.stringify(countsAs_([{ Family: 'P053K9189X', CountsAs: 'P053K9999X' }, { Family: 'P053K9999X', CountsAs: 'P053K9189X' }])) === JSON.stringify({ P053K9999X: 'P053K9189X' }) &&
+      JSON.stringify(countsAs_([{ Family: 'PA', CountsAs: 'PB' }, { Family: 'PB', CountsAs: 'PA' }], {})) === '{}');
     check('a Counts as pointing at itself or an unknown code is ignored', JSON.stringify(countsAs_([{ Family: 'P1', CountsAs: 'P1' }, { Family: 'P2', CountsAs: 'P999K0000X' }, { Family: 'P053K9189X' }, { Family: 'P3', CountsAs: '053K 91890' }])) === JSON.stringify({ P3: 'P053K9189X' }));
     // Van kit: the other code fills a van kit part too
     appendObjects_('VanKit', [{ Family: 'P053K9189X', Min: 1, Max: 2 }]);

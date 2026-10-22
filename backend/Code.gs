@@ -985,13 +985,18 @@ function partList_(parts) {
  * Parts that can stand in for another in a kit (the Parts tab's Counts as column, e.g. two press roll finger
  * assemblies for different media): { family: the kit part it counts as }. Codes that aren't in the parts list,
  * or point at themselves, are ignored; a chain (A counts as B, B as C) goes to the end, stopping at a loop.
+ * A part on a kit list (Kits or VanKit tab) never counts as another, so a link typed both ways still works.
  */
-function countsAs_(parts) {
+function countsAs_(parts, kitCodes) {
   const known = {}, link = {}, out = {};
+  if (!kitCodes) {
+    kitCodes = {};
+    ['Kits', 'VanKit'].forEach(t => { try { readTable_(t).forEach(k => { kitCodes[normaliseCode(k.Family).family] = true; }); } catch (e) { /* tab not set up */ } });
+  }
   parts.forEach(p => { known[p.Family] = true; });
   parts.forEach(p => {
     const to = normaliseCode(p.CountsAs).family;
-    if (to && to !== p.Family && known[to]) link[p.Family] = to;
+    if (to && to !== p.Family && known[to] && !kitCodes[p.Family]) link[p.Family] = to;
   });
   Object.keys(link).forEach(f => {
     let to = link[f];
