@@ -193,9 +193,17 @@ function archiveMovements() {
     arch.getRange(start, 1, aRows.length, aHead.length).setValues(aRows);
     if (arch.getLastRow() !== start + aRows.length - 1) throw new Error('The archive copy did not complete, so nothing was removed from Movements. Try again.');
 
-    // 2. Rewrite the Movements tab: carried-forward lines first, then the recent movements unchanged
+    // 2. Rewrite the Movements tab: carried-forward lines first, then the recent movements unchanged. The Name
+    //    column is a lookup filled from its heading cell, so it is left alone (writing over it would break it).
     const body = plan.carried.concat(plan.keep);
-    if (body.length) main.getRange(2, 1, body.length, plan.head.length).setValues(body);
+    const skip = plan.head.map(h => key_(String(h).trim()) === 'Name');
+    for (let c = 0; body.length && c < plan.head.length; c++) {
+      if (skip[c]) continue;
+      let e = c;
+      while (e + 1 < plan.head.length && !skip[e + 1]) e++;
+      main.getRange(2, c + 1, body.length, e - c + 1).setValues(body.map(r => r.slice(c, e + 1)));
+      c = e;
+    }
     const spare = plan.total - body.length;
     if (spare > 0) main.deleteRows(body.length + 2, spare);
 
@@ -337,7 +345,15 @@ function colLetter_(n) {
 
 function addNameLookups_() {
   const pCode = colLetter_(col_('Parts', 'Part Number')), pName = colLetter_(col_('Parts', 'Name'));
-  ['Kits', 'VanKit'].forEach(tab => {
+  // Movements gets its Name column next to the part number the first time (after that it stays wherever it is moved)
+  const mv = sheet_('Movements');
+  const mvHead = mv.getRange(1, 1, 1, Math.max(1, mv.getLastColumn())).getValues()[0].map(h => key_(String(h).trim()));
+  if (mvHead.indexOf('Name') < 0) {
+    const c = col_('Movements', 'Part Number');
+    mv.insertColumnAfter(c);
+    mv.getRange(1, c + 1).setValue('Name');
+  }
+  ['Kits', 'VanKit', 'Movements'].forEach(tab => {
     const sh = sheet_(tab);
     const code = colLetter_(col_(tab, 'Part Number')), name = col_(tab, 'Name');
     // XLOOKUP needs both ranges the same shape, so look up in the Parts code column and return its Name column

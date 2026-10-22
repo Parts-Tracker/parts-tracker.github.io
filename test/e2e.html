@@ -894,6 +894,10 @@
     const kitsF = ssx.getSheetByName('Kits').getRange(1, 4).getFormula(), vanF = ssx.getSheetByName('VanKit').getRange(1, 4).getFormula();
     check('Kits and VanKit get a Name column looked up from Parts', ssx.getSheetByName('Kits').getRange(1, 4).getValue() === 'Name' && ssx.getSheetByName('VanKit').getRange(1, 4).getValue() === 'Name' &&
       kitsF.includes('XLOOKUP(B2:B,Parts!A2:A,Parts!B2:B)') && vanF.includes('XLOOKUP(A2:A,Parts!A2:A,Parts!B2:B)'), [kitsF, vanF]);
+    const mvNameCol = col_('Movements', 'Name');
+    check('Movements gets a Name column next to Part Number, looked up from Parts', Math.abs(mvNameCol - col_('Movements', 'Part Number')) === 1 &&
+      /XLOOKUP\(.+Parts!.+"Not in Parts tab"/.test(ssx.getSheetByName('Movements').getRange(1, mvNameCol).getFormula()), [mvNameCol, col_('Movements', 'Part Number'), ssx.getSheetByName('Movements').getRange(1, mvNameCol).getFormula()]);
+    check('recording movements leaves the Name column to the formula', rows('Movements').every(m => m.Name === '' || m.Name === undefined));
     check('new kit rows leave the Name column to the formula', ssx.getSheetByName('Kits').getRange(2, 4).getValue() === '' && ssx.getSheetByName('Kits').data[1].length <= 3, ssx.getSheetByName('Kits').data[1]);
     // The user moved Name next to the part number (Kits: Model, Part Number, Name, Qty); rows added later skip it
     const kt = ssx.getSheetByName('Kits');
@@ -1278,6 +1282,8 @@
     previewArchive();
     check('archive preview changes nothing', rows('Movements').length === mvTotal && JSON.stringify(stockTotals_()) === stockBeforeArchive);
     const plan = archivePlan_();
+    const nameCol = col_('Movements', 'Name');
+    for (let r = 2; r <= mvSheet.getLastRow(); r++) mvSheet.getRange(r, nameCol).setValue('X' + r);   // stands in for the lookup's results
     archiveMovements();
     const book = Object.values(window.__gas.books)[0];
     const archived = book && book.getSheetByName('Movements');
@@ -1288,6 +1294,8 @@
     const mvAfter = rows('Movements');
     check('Movements is now carried-forward lines then the recent 5, in order', mvAfter.length === plan.carried.length + 5 && mvAfter.length < mvTotal &&
       mvAfter.slice(0, -5).every(m => m.Type === 'CARRIED_FORWARD' && m.Qty !== 0) && JSON.stringify(mvAfter.slice(-5).map(m => m.MovementID)) === JSON.stringify(recent5), [mvAfter.length, plan.carried.length, mvTotal]);
+    check('archiving leaves the Name lookup column alone', mvSheet.getRange(2, nameCol).getValue() === 'X2' && mvSheet.getRange(3, nameCol).getValue() === 'X3' &&
+      /XLOOKUP/.test(mvSheet.getRange(1, nameCol).getFormula()), [mvSheet.getRange(2, nameCol).getValue(), mvSheet.getRange(1, nameCol).getFormula()]);
     const archivedCount = archived.getLastRow();
     archiveMovements();
     check('running the archive again does nothing', rows('Movements').length === mvAfter.length && archived.getLastRow() === archivedCount && !stockDiff().length);

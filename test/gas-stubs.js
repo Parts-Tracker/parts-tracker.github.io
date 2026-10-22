@@ -57,6 +57,13 @@
     setFrozenRows() {}
     deleteRow(r) { this.data.splice(r - 1, 1); }
     deleteRows(r, n) { this.data.splice(r - 1, n); }
+    insertColumnAfter(c) {
+      this.data.forEach(line => { if (line.length > c) line.splice(c, 0, ''); });
+      const f = {};
+      Object.keys(this.formulas).forEach(k => { const [r, col] = k.split(':').map(Number); f[r + ':' + (col > c ? col + 1 : col)] = this.formulas[k]; });
+      this.formulas = f;
+      return this;
+    }
     setName(n) { this.name = n; return this; }
     protect() { const p = { description: '', warningOnly: false, setDescription(d) { this.description = d; return this; }, setWarningOnly(w) { this.warningOnly = w; return this; } }; this.protections = (this.protections || []).concat(p); return p; }
     getProtections() { return (this.protections || []).slice(); }
